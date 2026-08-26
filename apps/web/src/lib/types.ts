@@ -188,6 +188,32 @@ export interface AnalyticsSnapshot {
 
 export type ConnectionStatus = "connected" | "needs_attention" | "not_connected";
 
+/** What the credentials API returns — never plaintext values. */
+export interface CredentialSummary {
+  id: PlatformId;
+  connected: boolean;
+  status: "untested" | "ok" | "failed";
+  /** Masked preview like "frl_••••3f9a". */
+  keyPreview: string | null;
+  lastTestedAt: string | null;
+  lastTestMessage: string | null;
+  modelId: string | null;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface CredentialTestResult {
+  ok: boolean;
+  message: string;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface AiModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  contextLabel: string;
+}
+
 export interface PlatformCredential {
   id: PlatformId;
   name: string;
@@ -201,21 +227,12 @@ export interface PlatformCredential {
   usage?: { label: string; used: number; limit: number };
 }
 
-export interface AiModelOption {
-  id: string;
-  label: string;
-  provider: string;
-  contextLabel: string;
-}
-
 export interface OpenRouterState {
   selectedModelId: string;
   models: AiModelOption[];
   creditLabel: string;
   usageThisMonthLabel: string;
 }
-
-/* ------------------------------- Automation ------------------------------ */
 
 export interface AutomationSettings {
   /** Seconds between job scans. Minimum 30, default 60. */

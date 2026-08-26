@@ -41,3 +41,17 @@ export const backupCodes = sqliteTable("backup_codes", {
   usedAt: text("used_at"),
   createdAt: text("created_at").notNull(),
 });
+
+export const platformCredentials = sqliteTable("platform_credentials", {
+  /** Fixed platform id: "freelancer" | "openrouter". */
+  id: text("id").primaryKey(),
+  cipherText: text("cipher_text").notNull(),
+  iv: text("iv").notNull(),
+  authTag: text("auth_tag").notNull(),
+  /** JSON metadata, e.g. { modelId } for OpenRouter. Never secrets. */
+  meta: text("meta"),
+  /** "untested" | "ok" | "failed" — result of the last test action. */
+  status: text("status").notNull().default("untested"),
+  lastTestedAt: text("last_tested_at"),
+  updatedAt: text("updated_at").notNull(),
+});

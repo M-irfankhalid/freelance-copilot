@@ -74,5 +74,16 @@ function ensureSchema(db: Database.Database): void {
       used_at TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS platform_credentials (
+      id TEXT PRIMARY KEY,
+      cipher_text TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      meta TEXT,
+      status TEXT NOT NULL DEFAULT 'untested',
+      last_tested_at TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 }

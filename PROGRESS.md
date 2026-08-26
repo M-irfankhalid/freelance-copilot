@@ -122,6 +122,28 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - Login rate limiting is deliberately deferred — single-user local install; revisit as hardening later.
 - Onboarding wizard remains a visual mock until Phase 5 connects credential storage to it.
 
+## Phase 5, Platform Credentials, Current Phase
+
+### Done
+
+- [x] AES-256-GCM credential encryption via node:crypto, key scrypt-derived from a required ENCRYPTION_KEY env secret
+- [x] platform_credentials table storing cipher text, IV, and auth tag; values never leave the server in plaintext after save
+- [x] requireUser middleware guarding owner-only endpoints
+- [x] POST /api/credentials/:id/test — one lightweight real API call (Freelancer.com /users/self, OpenRouter /key) without saving
+- [x] PUT /api/credentials/:id — verifies against the live service BEFORE storing; failing credentials are refused
+- [x] Masked previews only ("frl_••••3f9a"); GET list never returns plaintext
+- [x] OpenRouter model selection persisted; live model catalogue fetched from OpenRouter
+- [x] Rate-limit quota (Freelancer headers) and credit usage (OpenRouter) surfaced for display
+- [x] Platforms page fully wired: real statuses, test buttons, replace dialog with inline errors, model selector, usage meters
+- [x] Onboarding steps 1–2 perform real verification and encrypted saves; model catalogue loads live
+- [x] dotenv now loads apps/server/.env then repo-root .env as fallback (cwd-independent)
+- [x] Test suite: encryption round-trip, masking, save/refuse flows, quota parsing, auth guard — 22 tests passing
+
+### Notes
+
+- ENCRYPTION_KEY was generated into the user's local .env; losing it makes stored credentials unreadable by design.
+- Profile import in onboarding stays mocked until Phase 6.
+
 ## Verification Log
 
 Record of user review sessions:

@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bot,
   CircleCheck,
+  CircleX,
   Download,
   KeyRound,
   PlugZap,
@@ -31,14 +32,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { openRouter as openRouterData, platformCredentials } from "@/lib/data/platforms";
+import { api, ApiError, NetworkError } from "@/lib/api/client";
+import type { AiModelOption, CredentialTestResult } from "@/lib/types";
 import { profile as importedProfile } from "@/lib/data/profile";
 import { cn } from "@/lib/utils";
 
 /**
- * First-run setup: credentials with real test actions later, profile import,
- * then relevancy preferences and scan interval. Every backend call here is
- * mocked with a short delay so the flow feels real.
+ * First-run setup. Credential steps perform REAL verification against the
+ * services and store encrypted values; the remaining steps keep their mock
+ * behaviour until their phases land (profile import = Phase 6).
  */
 
 const steps = [
@@ -49,7 +51,22 @@ const steps = [
   { id: 4, title: "Preferences", icon: SlidersHorizontal },
 ] as const;
 
+const stepDescriptions = [
+  "Five quick steps and the agent starts working for you.",
+  "Bring your own credential. We verify it with one lightweight call before saving anything.",
+  "Your AI budget lives here. Pick whichever model you want the agent to think with.",
+  "The agent only knows what this profile says — it will never invent experience or skills.",
+  "Tell the agent what to look for, what to avoid, and how often to look.",
+];
+
 type TestState = "idle" | "testing" | "ok" | "failed";
+
+interface StepTest {
+  state: TestState;
+  message?: string;
+}
+
+const idleTest: StepTest = { state: "idle" };
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
@@ -57,30 +74,74 @@ export default function OnboardingPage() {
 
   // Step 1 — Freelancer token
   const [freelancerToken, setFreelancerToken] = useState("");
-  const [freelancerTest, setFreelancerTest] = useState<TestState>("idle");
+  const [freelancer, setFreelancer] = useState<StepTest>(idleTest);
+  const [freelancerSaved, setFreelancerSaved] = useState(false);
 
   // Step 2 — OpenRouter key + model
-  const [openRouterKey, setOpenRouterKey] = useState("");
-  const [openRouterTest, setOpenRouterTest] = useState<TestState>("idle");
-  const [modelId, setModelId] = useState(openRouterData.selectedModelId);
+  const [orKey, setOrKey] = useState("");
+  const [openRouter, setOpenRouter] = useState<StepTest>(idleTest);
+  const [orSaved, setOrSaved] = useState(false);
+  const [models, setModels] = useState<AiModelOption[]>([]);
+  const [modelId, setModelId] = useState("");
 
-  // Step 3 — profile import
+  // Step 3 — profile import (mocked until Phase 6)
   const [profileImported, setProfileImported] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  // Step 4 — preferences
+  // Step 4 — preferences (mocked until Phase 6)
   const [skills, setSkills] = useState<string[]>([]);
   const [wants, setWants] = useState<string[]>([]);
   const [notWants, setNotWants] = useState<string[]>([]);
   const [interval, setIntervalSeconds] = useState("60");
 
-  const runTest = (
-    state: TestState,
-    done: (next: TestState) => void
-  ) => {
-    if (state === "testing") return;
-    done("testing");
-    window.setTimeout(() => done("ok"), 900);
+  /** Verify against the live service, then store encrypted. */
+  const testAndSave = async (
+    id: "freelancer" | "openrouter",
+    value: string,
+    setter: (next: StepTest) => void
+  ): Promise<boolean> => {
+    setter({ state: "testing" });
+    try {
+      const probe = await api<{ result: CredentialTestResult }>(
+        `/api/credentials/${id}/test`,
+        { method: "POST", body: { value } }
+      );
+      if (!probe.result.ok) {
+        setter({ state: "failed", message: probe.result.message });
+        return false;
+      }
+      await api(`/api/credentials/${id}`, { method: "PUT", body: { value } });
+      if (id === "openrouter") {
+        try {
+          const catalogue = await api<{ models: AiModelOption[] }>(
+            "/api/credentials/openrouter/models"
+          );
+          setModels(catalogue.models);
+          if (catalogue.models.length > 0) {
+            setModelId(catalogue.models[0].id);
+          }
+          await api("/api/credentials/openrouter/model", {
+            method: "PUT",
+            body: { modelId: catalogue.models[0].id },
+          });
+        } catch {
+          // Catalogue is optional — the key itself is stored.
+        }
+      }
+      setter({ state: "ok", message: probe.result.message });
+      return true;
+    } catch (cause) {
+      setter({
+        state: "failed",
+        message:
+          cause instanceof NetworkError
+            ? "Cannot reach the server"
+            : cause instanceof ApiError
+              ? cause.message
+              : "Verification failed",
+      });
+      return false;
+    }
   };
 
   const importProfile = () => {
@@ -91,13 +152,12 @@ export default function OnboardingPage() {
       setNotWants(importedProfile.notWants);
       setProfileImported(true);
       setImporting(false);
-    }, 1100);
+    }, 900);
   };
 
   return (
     <div className="flex min-h-svh flex-col items-center gap-8 bg-muted/40 p-4 py-10">
       <div className="w-full max-w-xl">
-        {/* Stepper */}
         <ol className="mb-6 flex items-center gap-1.5">
           {steps.map((entry, index) => (
             <li key={entry.id} className="flex flex-1 items-center gap-1.5 last:flex-none">
@@ -138,20 +198,18 @@ export default function OnboardingPage() {
                     value={freelancerToken}
                     onChange={(event) => {
                       setFreelancerToken(event.target.value);
-                      setFreelancerTest("idle");
+                      setFreelancer(idleTest);
+                      setFreelancerSaved(false);
                     }}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Profile → Account settings → API. Stored encrypted and never shown again.
+                    Profile settings → API on Freelancer.com. Stored encrypted and never shown again.
                   </p>
                 </div>
                 <TestRow
-                  state={freelancerTest}
-                  disabled={freelancerToken.trim().length === 0}
-                  okLabel="Token valid — scopes verified"
-                  onTest={() =>
-                    runTest(freelancerTest, (next) => setFreelancerTest(next))
-                  }
+                  test={freelancer}
+                  disabled={freelancerToken.trim().length < 8}
+                  onTest={() => void testAndSave("freelancer", freelancerToken, setFreelancer).then(setFreelancerSaved)}
                 />
               </div>
             ) : null}
@@ -165,37 +223,50 @@ export default function OnboardingPage() {
                       id="or-key"
                       type="password"
                       placeholder="sk-or-v1-…"
-                      value={openRouterKey}
+                      value={orKey}
                       onChange={(event) => {
-                        setOpenRouterKey(event.target.value);
-                        setOpenRouterTest("idle");
+                        setOrKey(event.target.value);
+                        setOpenRouter(idleTest);
+                        setOrSaved(false);
                       }}
                     />
                   </div>
                   <TestRow
-                    state={openRouterTest}
-                    disabled={openRouterKey.trim().length === 0}
-                    okLabel={`Key valid — ${openRouterData.creditLabel}`}
-                    onTest={() =>
-                      runTest(openRouterTest, (next) => setOpenRouterTest(next))
-                    }
+                    test={openRouter}
+                    disabled={orKey.trim().length < 8}
+                    onTest={() => void testAndSave("openrouter", orKey, setOpenRouter).then(setOrSaved)}
                   />
                 </div>
 
                 <div className="flex flex-col gap-1.5">
                   <Label>AI model</Label>
-                  <Select value={modelId} onValueChange={setModelId}>
-                    <SelectTrigger className="w-full" aria-label="Select model">
-                      <SelectValue placeholder="Choose a model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {openRouterData.models.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.label} · {model.contextLabel}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {models.length > 0 ? (
+                    <Select
+                      value={modelId || models[0].id}
+                      onValueChange={(picked) => {
+                        setModelId(picked);
+                        void api("/api/credentials/openrouter/model", {
+                          method: "PUT",
+                          body: { modelId: picked },
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="w-full" aria-label="Select model">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {models.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.label} · {model.contextLabel}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Model catalogue appears after the key is verified.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Used for analysis, matching, and proposals. Changeable anytime on Platforms.
                   </p>
@@ -211,7 +282,7 @@ export default function OnboardingPage() {
                       <div className="flex items-center gap-2">
                         <CircleCheck className="size-4 text-success" aria-hidden />
                         <p className="text-sm font-medium">
-                          Imported @{importedProfile.freelancerUsername}
+                          Imported @{importedProfile.freelancerUsername} (demo)
                         </p>
                       </div>
                       <ConnectionBadge status="connected" />
@@ -225,7 +296,8 @@ export default function OnboardingPage() {
                       <dd>{importedProfile.skills.length} found</dd>
                     </dl>
                     <p className="mt-3 text-xs text-muted-foreground">
-                      You can enrich everything manually on the Profile page after setup.
+                      Live import arrives with the profile phase — everything is editable on the
+                      Profile page.
                     </p>
                   </div>
                 ) : (
@@ -247,11 +319,7 @@ export default function OnboardingPage() {
               <div className="flex flex-col gap-5">
                 <div className="flex flex-col gap-1.5">
                   <Label>Your skills — used as job search keywords</Label>
-                  <ChipEditor
-                    values={skills}
-                    onChange={setSkills}
-                    placeholder="e.g. React"
-                  />
+                  <ChipEditor values={skills} onChange={setSkills} placeholder="e.g. React" />
                 </div>
                 <div className="grid gap-5 sm:grid-cols-2">
                   <div className="flex flex-col gap-1.5">
@@ -298,7 +366,7 @@ export default function OnboardingPage() {
           {step < steps.length - 1 ? (
             <Button
               onClick={() => setStep((s) => s + 1)}
-              disabled={(step === 1 && freelancerTest !== "ok") || (step === 2 && openRouterTest !== "ok")}
+              disabled={(step === 1 && !freelancerSaved) || (step === 2 && !orSaved)}
             >
               Continue
               <ArrowRight data-icon="inline-end" />
@@ -315,22 +383,13 @@ export default function OnboardingPage() {
   );
 }
 
-const stepDescriptions = [
-  "Five quick steps and the agent starts working for you.",
-  "Bring your own credential. We verify it with one lightweight call before saving anything.",
-  "Your AI budget lives here. Pick whichever model you want the agent to think with.",
-  "The agent only knows what this profile says — it will never invent experience or skills.",
-  "Tell the agent what to look for, what to avoid, and how often to look.",
-];
-
 function WelcomeStep() {
-  const freelancer = platformCredentials.find((c) => c.id === "freelancer");
   return (
     <ul className="flex flex-col gap-3 text-sm">
-      {[freelancer?.name ?? "Freelancer.com", "OpenRouter"].map((name) => (
+      {["Freelancer.com", "OpenRouter"].map((name) => (
         <li key={name} className="flex items-center gap-2.5 rounded-lg border p-3">
           <PlugZap className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          Connect your own {name} credentials — stored encrypted, tested before saving.
+          Connect your own {name} credentials — verified live, stored encrypted.
         </li>
       ))}
       <li className="flex items-center gap-2.5 rounded-lg border p-3">
@@ -346,43 +405,42 @@ function WelcomeStep() {
 }
 
 function TestRow({
-  state,
+  test,
   disabled,
-  okLabel,
   onTest,
 }: {
-  state: TestState;
+  test: StepTest;
   disabled: boolean;
-  okLabel: string;
   onTest: () => void;
 }) {
+  const busy = test.state === "testing";
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/40 px-3 py-2.5">
-      <div className="flex items-center gap-2 text-sm">
-        {state === "ok" ? (
-          <>
-            <CircleCheck className="size-4 text-success" aria-hidden />
-            <span>{okLabel}</span>
-          </>
-        ) : state === "failed" ? (
-          <>
-            <CircleCheck className="size-4 text-destructive" aria-hidden />
-            <span>Test failed — check the value and try again.</span>
-          </>
-        ) : state === "testing" ? (
-          <span className="text-muted-foreground">Calling API…</span>
-        ) : (
-          <span className="text-muted-foreground">Not verified yet</span>
-        )}
+    <div className="flex flex-col gap-2 rounded-lg border bg-muted/40 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          {test.state === "ok" ? (
+            <>
+              <CircleCheck className="size-4 text-success" aria-hidden />
+              <span>Verified &amp; saved encrypted</span>
+            </>
+          ) : test.state === "failed" ? (
+            <>
+              <CircleX className="size-4 text-destructive" aria-hidden />
+              <span>{test.message ?? "Verification failed"}</span>
+            </>
+          ) : busy ? (
+            <span className="text-muted-foreground">Calling the service…</span>
+          ) : (
+            <span className="text-muted-foreground">Not verified yet</span>
+          )}
+        </div>
+        <Button variant="outline" size="sm" onClick={onTest} disabled={disabled || busy}>
+          {busy ? "Testing…" : "Verify & save"}
+        </Button>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={onTest}
-        disabled={disabled || state === "testing"}
-      >
-        {state === "testing" ? "Testing…" : "Test connection"}
-      </Button>
+      {test.state === "ok" && test.message !== undefined ? (
+        <p className="text-xs text-muted-foreground">{test.message}</p>
+      ) : null}
     </div>
   );
 }

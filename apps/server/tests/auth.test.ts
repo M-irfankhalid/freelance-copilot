@@ -11,6 +11,7 @@ import type { Express } from "express";
 process.env.NODE_ENV = "test";
 process.env.DATABASE_PATH = ":memory:";
 process.env.LOG_LEVEL = "error";
+process.env.ENCRYPTION_KEY ??= "test-master-key-at-least-32-chars!!";
 
 const { createApp } = await import("../src/app.js");
 const { closeDb } = await import("../src/db/index.js");
