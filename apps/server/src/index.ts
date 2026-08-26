@@ -1,16 +1,26 @@
-import express from "express";
-import cors from "cors";
+import { createApp } from "./app.js";
+import { env } from "./env.js";
+import { closeDb } from "./db/index.js";
+import { createLogger } from "./lib/logger.js";
 
-const app = express();
-const PORT = 4000;
+const log = createLogger("system");
 
-app.use(cors());
-app.use(express.json());
-
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok" });
+/** Bootstrap: start listening, then shut down cleanly on signals. */
+const app = createApp();
+const server = app.listen(env.PORT, () => {
+  log.info(`Server listening on http://localhost:${env.PORT}`, {
+    nodeEnv: env.NODE_ENV,
+    database: env.DATABASE_PATH,
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+function shutdown(signal: string): void {
+  log.info(`${signal} received, shutting down`);
+  server.close(() => {
+    closeDb();
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
