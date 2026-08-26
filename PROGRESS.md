@@ -135,9 +135,11 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - [x] OpenRouter model selection persisted; live model catalogue fetched from OpenRouter
 - [x] Rate-limit quota (Freelancer headers) and credit usage (OpenRouter) surfaced for display
 - [x] Platforms page fully wired: real statuses, test buttons, replace dialog with inline errors, model selector, usage meters
-- [x] Onboarding steps 1–2 perform real verification and encrypted saves; model catalogue loads live
+- [x] RouteErrorBoundary added as global errorElement on root and auth routes
+- [x] Onboarding steps 1–2 perform real verification and encrypted saves; model catalogue loads live; step 3 performs real profile import
 - [x] dotenv now loads apps/server/.env then repo-root .env as fallback (cwd-independent)
-- [x] Test suite: encryption round-trip, masking, save/refuse flows, quota parsing, auth guard — 22 tests passing
+- [x] Test suite: encryption round-trip, masking, save/refuse flows, quota parsing, auth guard — 22 tests passing (28 total with profile tests)
+- [x] ENCRYPTION_KEY generated into user's local .env
 
 ### Notes
 
@@ -151,9 +153,12 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - [x] user_profile table, one row per installation owner, JSON array columns for skills/experience/portfolio/filters
 - [x] GET/PUT /api/profile with strict Zod validation on write and defensive parsing on read
 - [x] POST /api/profile/import fetches the owner's public data from Freelancer.com using their saved token and maps it to our schema; returns a draft for review, stores nothing until PUT
+- [x] Import uses correct API params: `self/?compact=false&profile_description=true&jobs=true` for profile data, then separate `portfolios/?users[]={id}` call for portfolio projects
 - [x] Import tolerates partial data: missing fields stay empty rather than inventing content
+- [x] Import maps real API fields only: username→freelancerUsername, display_name→name, public_name→title, hourly_rate→hourlyRate, profile_description→about, jobs[].name→skills, portfolios→portfolio array (title/url/description)
 - [x] Profile page fully wired: load, edit everywhere, import button fills the form while preserving manual-only sections, save with inline errors
-- [x] Onboarding step 3 performs real import; Finish persists imported basics plus keyword preferences into the profile
+- [x] Onboarding step 3 performs real import with profile_description + jobs + portfolios params; Finish persists imported basics plus keyword preferences into the profile
+- [x] Test suite: session guard, round-trip persistence, validation rejection with field details, import mapping incl. malformed skill entries, missing-token failure mode, portfolio import mapping — 28 tests passing
 - [x] Test suite: session guard, round-trip persistence, validation rejection with field details, import mapping incl. malformed skill entries, missing-token failure mode - 28 tests passing
 
 ### Notes
