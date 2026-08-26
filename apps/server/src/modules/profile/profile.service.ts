@@ -144,10 +144,25 @@ export function saveProfile(userId: string, data: ProfileData): void {
   }
 }
 
+interface FreelancerPortfolio {
+  id: number;
+  title: string;
+  description: string | null;
+  files: Array<{
+    cdn_url: string | null;
+    thumbnails?: Array<{ cdn_url: string | null }>;
+  }>;
+}
+
 /**
  * Fetch the owner's own public data from Freelancer.com using their stored
  * token and map it onto our profile shape. Returns a draft — nothing is
  * saved until the user reviews and saves it.
+ *
+ * Two API calls are made:
+ *  1. Self endpoint with profile_description=true and jobs=true to get the
+ *     profile text, skills (jobs array), and the user's Freelancer ID.
+ *  2. Portfolios endpoint using the user ID to fetch portfolio projects.
  */
 export async function importFromFreelancer(): Promise<ProfileData> {
   const credRow = getDb()
@@ -163,17 +178,17 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     );
   }
   const token = decrypt(credRow);
+  const authHeaders = { Authorization: `Bearer ${token}` };
 
-  // Freelancer.com self endpoint supports boolean query parameters to expand
-  // the response. profile_description=true returns the full About text as a
-  // string; jobs=true returns the user's project history (job categories).
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
-  let response: Response;
+
+  // Step 1: Fetch self endpoint with expanded params.
+  let selfResponse: Response;
   try {
-    response = await fetch(
+    selfResponse = await fetch(
       "https://www.freelancer.com/api/users/0.1/self/?compact=false&profile_description=true&jobs=true",
-      { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }
+      { headers: authHeaders, signal: controller.signal }
     );
   } catch {
     throw new AppError(502, "UPSTREAM_ERROR", "Could not reach Freelancer.com");
@@ -181,28 +196,82 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     clearTimeout(timer);
   }
 
-  if (!response.ok) {
+  if (!selfResponse.ok) {
     throw new AppError(
       502,
       "UPSTREAM_ERROR",
-      `Freelancer.com responded with status ${response.status}`
+      `Freelancer.com responded with status ${selfResponse.status}`
     );
   }
-  const body = (await response.json()) as {
+  const selfBody = (await selfResponse.json()) as {
     status?: string;
     result?: Record<string, unknown>;
   };
-  if (body.status !== "success" || body.result === undefined) {
+  if (selfBody.status !== "success" || selfBody.result === undefined) {
     throw new AppError(502, "UPSTREAM_ERROR", "Freelancer.com returned no profile");
   }
 
-  const r = body.result;
+  const r = selfBody.result;
   const asString = (value: unknown): string | null =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 
+  // Extract user ID for the portfolios API call.
+  const userId = typeof r.id === "number" ? r.id : Number(r.id);
+
+  // Step 2: Fetch portfolios using the user ID.
+  let portfolio: ProfileData["portfolio"] = [];
+  if (!Number.isNaN(userId) && userId > 0) {
+    const pt = setTimeout(() => controller.abort(), 10_000);
+    let portfoliosResponse: Response | null = null;
+    try {
+      portfoliosResponse = await fetch(
+        `https://www.freelancer.com/api/users/0.1/portfolios/?users[]=${userId}&compact=false`,
+        { headers: authHeaders }
+      );
+    } catch {
+      // Portfolio fetch failure is non-fatal — import still returns basics.
+      clearTimeout(pt);
+      portfolio = [];
+    } finally {
+      clearTimeout(pt);
+    }
+
+    if (portfoliosResponse?.ok) {
+      const pBody = (await portfoliosResponse.json()) as {
+        status?: string;
+        result?: {
+          portfolios?: Record<string, FreelancerPortfolio[]>;
+        };
+      };
+      if (pBody.status === "success" && pBody.result?.portfolios) {
+        const items = pBody.result.portfolios[String(userId)] ?? [];
+        portfolio = items
+          .filter(
+            (p): p is FreelancerPortfolio =>
+              p !== null &&
+              typeof p === "object" &&
+              typeof p.title === "string" &&
+              p.title.trim().length > 0
+          )
+          .map((p) => {
+            const url =
+              p.files?.[0]?.cdn_url ??
+              p.files?.[0]?.thumbnails?.[0]?.cdn_url ??
+              null;
+            return {
+              title: p.title.trim(),
+              url: url ? `https:${url}` : null,
+              description: asString(p.description),
+            };
+          })
+          .slice(0, 30);
+      }
+    }
+  }
+
   // The self endpoint returns only public profile fields. With
   // profile_description=true we get the full About text. With jobs=true we get
-  // past project categories (mapped as skills where relevant).
+  // the user's skill/job categories (name field).
   const draft = profileSchema.parse({
     freelancerUsername: asString(r.username),
     name: asString(r.display_name) ?? asString(r.username),
@@ -224,7 +293,7 @@ export async function importFromFreelancer(): Promise<ProfileData> {
             .slice(0, 50)
         : [],
     experience: [],
-    portfolio: [],
+    portfolio,
     certifications: [],
     preferredProjectTypes: [],
     wants: [],
@@ -233,7 +302,8 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   });
 
   log.info(
-    `Imported Freelancer profile for @${draft.freelancerUsername ?? "unknown"}`
+    `Imported Freelancer profile for @${draft.freelancerUsername ?? "unknown"}`,
+    { portfolioCount: portfolio.length, skillCount: draft.skills.length }
   );
   return draft;
 }

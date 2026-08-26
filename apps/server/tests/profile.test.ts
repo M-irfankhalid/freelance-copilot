@@ -142,7 +142,7 @@ describe("profile", () => {
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
         if (url.startsWith(baseUrl)) return realFetch(input);
-        if (url.includes("freelancer.com/api/users")) {
+        if (url.includes("freelancer.com/api/users/0.1/self")) {
           // Freelancer.com self endpoint with profile_description=true and
           // jobs=true returns: username, display_name, hourly_rate,
           // public_name, profile_description (About text string),
@@ -152,6 +152,7 @@ describe("profile", () => {
             JSON.stringify({
               status: "success",
               result: {
+                id: 77124963,
                 username: "irfan_dev",
                 display_name: "Irfan Developer",
                 public_name: "React Developer",
@@ -163,6 +164,43 @@ describe("profile", () => {
                   { id: 759, name: "React.js", category: { id: 1, name: "Web Dev" }, seo_url: "react_js", local: false },
                   { id: 500, name: "Node.js", category: { id: 1, name: "Web Dev" }, seo_url: "nodejs", local: false },
                 ],
+              },
+            }),
+            { status: 200 }
+          );
+        }
+        if (url.includes("freelancer.com/api/users/0.1/portfolios")) {
+          // Portfolios endpoint returns projects the user has added to their
+          // Freelancer portfolio, with title, description, and files.
+          return new Response(
+            JSON.stringify({
+              status: "success",
+              result: {
+                portfolios: {
+                  "77124963": [
+                    {
+                      id: 12062244,
+                      title: "AroundU.Social - Location-Based App",
+                      description: "Location-based social web app built with MERN stack.",
+                      files: [
+                        {
+                          cdn_url: "//cdn2.f-cdn.com/files/download/123456/screenshot.png",
+                          thumbnails: [{ cdn_url: "//cdn6.f-cdn.com/files/download/123456/thumb.jpg" }],
+                        },
+                      ],
+                    },
+                    {
+                      id: 12418902,
+                      title: "Figma to Next.js Landing Page",
+                      description: "Pixel-perfect landing page from Figma design.",
+                      files: [
+                        {
+                          cdn_url: "//cdn3.f-cdn.com/files/download/789012/landing.png",
+                        },
+                      ],
+                    },
+                  ],
+                },
               },
             }),
             { status: 200 }
@@ -183,8 +221,9 @@ describe("profile", () => {
           name: string | null;
           title: string | null;
           hourlyRate: string | null;
+          about: string | null;
           skills: string[];
-          wants: string[];
+          portfolio: { title: string; url: string | null; description: string | null }[];
         };
       };
       expect(body.profile.freelancerUsername).toBe("irfan_dev");
@@ -194,6 +233,11 @@ describe("profile", () => {
       // profile_description=true maps to about; jobs=true maps skill names to skills.
       expect(body.profile.about).toBe("Full-stack developer with 5 years experience.");
       expect(body.profile.skills).toEqual(["JavaScript", "React.js", "Node.js"]);
+      // Portfolios fetched from a separate /portfolios/ API call, mapped to title/url/description.
+      expect(body.profile.portfolio).toHaveLength(2);
+      expect(body.profile.portfolio[0]?.title).toBe("AroundU.Social - Location-Based App");
+      expect(body.profile.portfolio[0]?.description).toBe("Location-based social web app built with MERN stack.");
+      expect(body.profile.portfolio[0]?.url).toBe("https://cdn2.f-cdn.com/files/download/123456/screenshot.png");
       // Nothing was stored by the import itself.
       const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
       const after = (await get.json()) as { profile: { title: string | null } | null };
