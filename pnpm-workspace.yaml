@@ -1,5 +1,6 @@
 packages:
   - "apps/*"
 allowBuilds:
-  better-sqlite3: set this to true or false
+  # Native SQLite driver — needs its install script to fetch/build the binding.
+  better-sqlite3: true
   esbuild: false
