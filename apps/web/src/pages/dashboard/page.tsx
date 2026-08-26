@@ -1,4 +1,5 @@
 import { ActivityFeedCard } from "@/components/dashboard/activity-feed-card";
+import { ApiStatusChip } from "@/components/dashboard/api-status-chip";
 import { JobsRequiringAttentionCard } from "@/components/dashboard/jobs-attention-card";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { MatchQualityCard } from "@/components/dashboard/match-quality-card";
@@ -30,8 +31,9 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           {greeting}, {firstName}
         </h1>
-        <p className="text-sm text-muted-foreground">
+        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           {dateLabel} · Here is how your pipeline stands today.
+          <ApiStatusChip />
         </p>
       </header>
 

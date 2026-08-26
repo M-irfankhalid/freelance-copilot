@@ -6,6 +6,7 @@ import { requestLogger } from "./middleware/request-logger.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
 import { healthRouter } from "./modules/health/health.routes.js";
+import { authRouter } from "./modules/auth/auth.routes.js";
 
 /**
  * Application factory. Modular monolith: feature modules mount their own
@@ -21,6 +22,7 @@ export function createApp(): Express {
 
   // Feature modules — one router per module, mounted under /api.
   app.use("/api/health", healthRouter);
+  app.use("/api/auth", authRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

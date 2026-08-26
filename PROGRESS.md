@@ -27,7 +27,7 @@ Then open http://localhost:5173. Suggested review route: /signup → /onboarding
 - [x] .env.example template created
 - [x] Unused template assets and dead files removed from apps/web
 
-## Phase 1, Frontend, Mock Data Only, Current Phase
+## Phase 1, Frontend, Mock Data Only
 
 ### Done — pending user visual verification
 
@@ -78,7 +78,24 @@ Then open http://localhost:5173. Suggested review route: /signup → /onboarding
 
 ### Verification status
 
-Typecheck clean, lint clean, tests 6/6 passing, live smoke test of health, 404, and malformed-body paths done against an ephemeral-port server.
+Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of health, 404, and malformed-body paths done against an ephemeral-port server.
+
+## Phase 3, Frontend and Backend Integration, Current Phase
+
+### Done
+
+- [x] Typed API client (`lib/api/client.ts`): JSON envelope parsing, ApiError with status/code/details, NetworkError, 10s timeout, cookie credentials included
+- [x] `useApi` hook with derived loading state, typed errors, refetch keeping previous data visible
+- [x] Server session probe `GET /api/auth/me` returning `{ authenticated, authEnabled }`; reports auth disabled until Phase 4
+- [x] AuthProvider context: loading → authenticated / unauthenticated / unavailable (server-decided)
+- [x] ProtectedRoute guarding the app shell — redirects to /login once the server enables auth; bypasses while disabled so development stays usable. Zero frontend changes needed when Phase 4 lands
+- [x] First live data in the UI: Dashboard API-status chip consuming `/api/health` through the Vite proxy
+- [x] E2E verified: browser path Vite :5199 → proxy → Express → SQLite responds for health and session endpoints
+
+### Notes
+
+- Pages still render mock data from `lib/data/*` by design: real domain endpoints arrive with their own phases (jobs in Phase 7, proposals in Phase 9, logs in Phase 12). Each page swaps to `useApi` one file at a time from Phase 7 onward.
+- Login/signup remain visual mocks until Phase 4.
 
 ## Verification Log
 

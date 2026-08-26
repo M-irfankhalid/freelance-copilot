@@ -20,8 +20,9 @@ export default defineConfig([
     },
   },
   {
-    // shadcn primitives legitimately export constants alongside components.
-    files: ['src/components/ui/**'],
+    // shadcn primitives legitimately export constants alongside components;
+    // the auth context pairs its provider with the useAuth hook by design.
+    files: ['src/components/ui/**', 'src/lib/auth.tsx'],
     rules: {
       'react-refresh/only-export-components': 'off',
     },

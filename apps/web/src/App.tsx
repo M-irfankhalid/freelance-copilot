@@ -6,6 +6,8 @@ import {
 } from "react-router";
 
 import { AppLayout } from "@/components/layout/app-layout";
+import { AuthProvider } from "@/lib/auth";
+import { ProtectedRoute } from "@/components/shared/protected-route";
 import { DashboardErrorBoundary } from "@/pages/dashboard/error";
 import { DashboardLoading } from "@/pages/dashboard/loading";
 import AnalyticsPage from "@/pages/analytics/page";
@@ -37,7 +39,11 @@ const router = createBrowserRouter([
   { path: "/onboarding", element: <OnboardingPage /> },
   {
     path: "/",
-    element: <AppLayout />,
+    element: (
+      <ProtectedRoute>
+        <AppLayout />
+      </ProtectedRoute>
+    ),
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       {
@@ -67,5 +73,9 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
+  );
 }
