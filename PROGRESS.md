@@ -80,7 +80,7 @@ Then open http://localhost:5173. Suggested review route: /signup → /onboarding
 
 Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of health, 404, and malformed-body paths done against an ephemeral-port server.
 
-## Phase 3, Frontend and Backend Integration, Current Phase
+## Phase 3, Frontend and Backend Integration
 
 ### Done
 
@@ -97,7 +97,7 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - Pages still render mock data from `lib/data/*` by design: real domain endpoints arrive with their own phases (jobs in Phase 7, proposals in Phase 9, logs in Phase 12). Each page swaps to `useApi` one file at a time from Phase 7 onward.
 - Login/signup remain visual mocks until Phase 4.
 
-## Phase 4, Authentication, Current Phase
+## Phase 4, Authentication
 
 ### Done
 
