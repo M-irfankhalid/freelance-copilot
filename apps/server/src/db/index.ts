@@ -75,6 +75,25 @@ function ensureSchema(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_profile (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      freelancer_username TEXT,
+      name TEXT,
+      title TEXT,
+      hourly_rate TEXT,
+      about TEXT,
+      skills TEXT,
+      experience TEXT,
+      portfolio TEXT,
+      certifications TEXT,
+      preferred_project_types TEXT,
+      wants TEXT,
+      not_wants TEXT,
+      custom_instructions TEXT,
+      imported_from_freelancer TEXT NOT NULL DEFAULT '0',
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS platform_credentials (
       id TEXT PRIMARY KEY,
       cipher_text TEXT NOT NULL,

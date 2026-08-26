@@ -122,7 +122,7 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - Login rate limiting is deliberately deferred — single-user local install; revisit as hardening later.
 - Onboarding wizard remains a visual mock until Phase 5 connects credential storage to it.
 
-## Phase 5, Platform Credentials, Current Phase
+## Phase 5, Platform Credentials
 
 ### Done
 
@@ -143,6 +143,23 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 
 - ENCRYPTION_KEY was generated into the user's local .env; losing it makes stored credentials unreadable by design.
 - Profile import in onboarding stays mocked until Phase 6.
+
+## Phase 6, Profile
+
+### Done
+
+- [x] user_profile table, one row per installation owner, JSON array columns for skills/experience/portfolio/filters
+- [x] GET/PUT /api/profile with strict Zod validation on write and defensive parsing on read
+- [x] POST /api/profile/import fetches the owner's public data from Freelancer.com using their saved token and maps it to our schema; returns a draft for review, stores nothing until PUT
+- [x] Import tolerates partial data: missing fields stay empty rather than inventing content
+- [x] Profile page fully wired: load, edit everywhere, import button fills the form while preserving manual-only sections, save with inline errors
+- [x] Onboarding step 3 performs real import; Finish persists imported basics plus keyword preferences into the profile
+- [x] Test suite: session guard, round-trip persistence, validation rejection with field details, import mapping incl. malformed skill entries, missing-token failure mode - 28 tests passing
+
+### Notes
+
+- The AI may only use facts from this profile; validation is the enforcement point.
+- Scan interval chosen in onboarding remains visual until the automation phase persists settings.
 
 ## Verification Log
 

@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/select";
 import { api, ApiError, NetworkError } from "@/lib/api/client";
 import type { AiModelOption, CredentialTestResult } from "@/lib/types";
-import { profile as importedProfile } from "@/lib/data/profile";
 import { cn } from "@/lib/utils";
 
 /**
@@ -84,9 +83,19 @@ export default function OnboardingPage() {
   const [models, setModels] = useState<AiModelOption[]>([]);
   const [modelId, setModelId] = useState("");
 
-  // Step 3 — profile import (mocked until Phase 6)
+  // Step 3 - real profile import
   const [profileImported, setProfileImported] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [draft, setDraft] = useState<{
+    freelancerUsername: string | null;
+    name: string | null;
+    title: string | null;
+    hourlyRate: string | null;
+    about: string | null;
+    skills: string[] | null;
+    wants: string[] | null;
+  } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Step 4 — preferences (mocked until Phase 6)
   const [skills, setSkills] = useState<string[]>([]);
@@ -144,15 +153,60 @@ export default function OnboardingPage() {
     }
   };
 
-  const importProfile = () => {
+  const importProfile = async () => {
+    if (importing) return;
     setImporting(true);
-    window.setTimeout(() => {
-      setSkills(importedProfile.skills);
-      setWants(importedProfile.wants);
-      setNotWants(importedProfile.notWants);
+    setImportError(null);
+    try {
+      const body = await api<{
+        profile: {
+          freelancerUsername: string | null;
+          name: string | null;
+          title: string | null;
+          hourlyRate: string | null;
+          about: string | null;
+          skills: string[];
+          wants: string[];
+        };
+      }>("/api/profile/import", { method: "POST" });
+      setDraft(body.profile);
+      setSkills(body.profile.skills ?? []);
+      setWants(body.profile.wants ?? []);
       setProfileImported(true);
+    } catch (cause) {
+      setImportError(
+        cause instanceof NetworkError
+          ? "Cannot reach the server"
+          : cause instanceof ApiError
+            ? cause.message
+            : "Import failed"
+      );
+    } finally {
       setImporting(false);
-    }, 900);
+    }
+  };
+
+  /** Persist imported data plus preferences, then head to the dashboard. */
+  const finishSetup = async () => {
+    await api("/api/profile", {
+      method: "PUT",
+      body: {
+        freelancerUsername: draft?.freelancerUsername ?? null,
+        name: draft?.name ?? null,
+        title: draft?.title ?? null,
+        hourlyRate: draft?.hourlyRate ?? null,
+        about: draft?.about ?? null,
+        skills,
+        experience: [],
+        portfolio: [],
+        certifications: [],
+        preferredProjectTypes: [],
+        wants,
+        notWants,
+        customInstructions: null,
+      },
+    });
+    navigate("/dashboard");
   };
 
   return (
@@ -276,24 +330,31 @@ export default function OnboardingPage() {
 
             {step === 3 ? (
               <div className="flex flex-col gap-4">
+                {importError !== null ? (
+                  <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-sm text-destructive">
+                    {importError}
+                  </p>
+                ) : null}
                 {profileImported ? (
                   <div className="rounded-lg border p-3.5">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <CircleCheck className="size-4 text-success" aria-hidden />
                         <p className="text-sm font-medium">
-                          Imported @{importedProfile.freelancerUsername} (demo)
+                          Imported @{draft?.freelancerUsername ?? "unknown"}
                         </p>
                       </div>
                       <ConnectionBadge status="connected" />
                     </div>
                     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                      <dt className="text-muted-foreground">Name</dt>
+                      <dd>{draft?.name ?? "–"}</dd>
                       <dt className="text-muted-foreground">Title</dt>
-                      <dd>{importedProfile.title}</dd>
+                      <dd>{draft?.title ?? "–"}</dd>
                       <dt className="text-muted-foreground">Rate</dt>
-                      <dd>{importedProfile.hourlyRateLabel}</dd>
+                      <dd>{draft?.hourlyRate ?? "–"}</dd>
                       <dt className="text-muted-foreground">Skills</dt>
-                      <dd>{importedProfile.skills.length} found</dd>
+                      <dd>{(draft?.skills ?? []).length} found</dd>
                     </dl>
                     <p className="mt-3 text-xs text-muted-foreground">
                       Live import arrives with the profile phase — everything is editable on the
@@ -372,7 +433,7 @@ export default function OnboardingPage() {
               <ArrowRight data-icon="inline-end" />
             </Button>
           ) : (
-            <Button onClick={() => navigate("/dashboard")}>
+            <Button onClick={() => void finishSetup()}>
               Finish setup
               <ArrowRight data-icon="inline-end" />
             </Button>

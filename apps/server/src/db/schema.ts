@@ -55,3 +55,26 @@ export const platformCredentials = sqliteTable("platform_credentials", {
   lastTestedAt: text("last_tested_at"),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const userProfile = sqliteTable("user_profile", {
+  /** Owner's user id — one profile per installation. */
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  freelancerUsername: text("freelancer_username"),
+  name: text("name"),
+  title: text("title"),
+  hourlyRate: text("hourly_rate"),
+  about: text("about"),
+  /** JSON-encoded string arrays and structured lists. */
+  skills: text("skills"),
+  experience: text("experience"),
+  portfolio: text("portfolio"),
+  certifications: text("certifications"),
+  preferredProjectTypes: text("preferred_project_types"),
+  wants: text("wants"),
+  notWants: text("not_wants"),
+  customInstructions: text("custom_instructions"),
+  importedFromFreelancer: text("imported_from_freelancer").notNull().default("0"),
+  updatedAt: text("updated_at").notNull(),
+});
