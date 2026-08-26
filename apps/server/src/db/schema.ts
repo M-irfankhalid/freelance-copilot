@@ -1,16 +1,43 @@
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
- * Foundation schema. Tables for auth, credentials, jobs, and proposals are
- * added in their own phases — this file only holds what Phase 2 needs.
+ * Foundation schema. Tables for credentials, jobs, and proposals are added
+ * in their own phases — this file holds what auth needs plus the log table.
  */
 export const logs = sqliteTable("logs", {
   id: text("id").primaryKey(),
-  /** ISO 8601 timestamp. */
   time: text("time").notNull(),
   level: text("level").notNull(),
   category: text("category").notNull(),
   message: text("message").notNull(),
-  /** JSON-encoded redacted metadata, when present. */
   meta: text("meta"),
+});
+
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("users_email_unique").on(table.email),
+]);
+
+export const sessions = sqliteTable("sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const backupCodes = sqliteTable("backup_codes", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  codeHash: text("code_hash").notNull().unique(),
+  usedAt: text("used_at"),
+  createdAt: text("created_at").notNull(),
 });

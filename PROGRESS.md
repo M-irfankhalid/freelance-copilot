@@ -97,6 +97,31 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - Pages still render mock data from `lib/data/*` by design: real domain endpoints arrive with their own phases (jobs in Phase 7, proposals in Phase 9, logs in Phase 12). Each page swaps to `useApi` one file at a time from Phase 7 onward.
 - Login/signup remain visual mocks until Phase 4.
 
+## Phase 4, Authentication, Current Phase
+
+### Done
+
+- [x] Password hashing on node:crypto scrypt (memory-hard KDF, zero native deps), constant-time verification
+- [x] Users, sessions, and backup_codes tables added to schema and idempotent bootstrap
+- [x] Sessions: httpOnly cookie holding a random token, only its SHA-256 stored server-side, 30 day expiry, expired rows cleaned on read
+- [x] POST /api/auth/register — first account becomes installation owner, generates 8 unambiguous one-time backup codes returned exactly once, signs the user in; further registrations refused with 409
+- [x] POST /api/auth/login — identical error for unknown email vs wrong password
+- [x] POST /api/auth/logout — destroys session row and clears cookie
+- [x] POST /api/auth/recover — consumes one unused code, resets password, invalidates all existing sessions
+- [x] GET /api/auth/me now reports authenticated state, user identity, and needsSetup for fresh installs
+- [x] Zod validation on every auth body; auth events logged via the structured logger (no secrets)
+- [x] Login page wired to real endpoint with inline error display and remembered destination
+- [x] Recovery dialog takes code + new password and reports success
+- [x] Signup page displays the real server-generated codes at step two
+- [x] Sidebar/header account menu shows the signed-in user; logout hits the API and refreshes auth state so ProtectedRoute redirects
+- [x] Auth test suite: registration, ownership refusal, weak-password rejection, wrong-password envelope, login/logout lifecycle, recovery incl. reuse rejection — 15 tests passing total
+- [x] Full flow exercised live through the Vite proxy against a real SQLite file database
+
+### Notes
+
+- Login rate limiting is deliberately deferred — single-user local install; revisit as hardening later.
+- Onboarding wizard remains a visual mock until Phase 5 connects credential storage to it.
+
 ## Verification Log
 
 Record of user review sessions:

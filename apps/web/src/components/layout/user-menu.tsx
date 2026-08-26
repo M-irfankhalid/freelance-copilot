@@ -17,16 +17,37 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { currentUser } from "@/lib/data/user";
+import { useAuth } from "@/lib/auth";
 
 /**
- * Account controls shared by the sidebar footer (full row with labels)
- * and the site header (compact avatar-only trigger).
+ * Account controls shared by the sidebar footer (full row) and the site
+ * header (compact avatar-only). Shows the signed-in user once auth is live;
+ * falls back to the demo identity while no session exists.
  */
+
+function initialsFor(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+}
+
+function displayName(authName: string | undefined): string {
+  return authName ?? currentUser.name;
+}
+
 export function UserMenu({
   variant = "sidebar",
 }: {
   variant?: "sidebar" | "header";
 }) {
+  const { user } = useAuth();
+  const name = displayName(user?.name);
+  const email = user?.email ?? currentUser.email;
+  const initials = user ? initialsFor(user.name) : currentUser.initials;
+
   if (variant === "header") {
     return (
       <DropdownMenu>
@@ -39,12 +60,12 @@ export function UserMenu({
           >
             <Avatar aria-hidden>
               <AvatarFallback className="bg-emerald-600 text-xs font-medium text-white">
-                {currentUser.initials}
+                {initials}
               </AvatarFallback>
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
-        <UserMenuContent align="end" />
+        <UserMenuContent name={name} email={email} align="end" />
       </DropdownMenu>
     );
   }
@@ -60,19 +81,19 @@ export function UserMenu({
             >
               <Avatar aria-hidden>
                 <AvatarFallback className="bg-emerald-600 text-xs font-medium text-white">
-                  {currentUser.initials}
+                  {initials}
                 </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate font-medium">{currentUser.name}</span>
+                <span className="truncate font-medium">{name}</span>
                 <span className="truncate text-xs text-sidebar-foreground/70">
-                  {currentUser.email}
+                  {email}
                 </span>
               </div>
               <ChevronsUpDown className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
-          <UserMenuContent align="start" />
+          <UserMenuContent name={name} email={email} align="start" />
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -80,10 +101,28 @@ export function UserMenu({
 }
 
 function UserMenuContent({
+  name,
+  email,
   align,
 }: {
+  name: string;
+  email: string;
   align: "start" | "end";
 }) {
+  const { refresh } = useAuth();
+
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } finally {
+      // Re-probe the session; ProtectedRoute bounces to /login when it ends.
+      refresh();
+    }
+  };
+
   return (
     <DropdownMenuContent
       align={align}
@@ -92,9 +131,9 @@ function UserMenuContent({
       className="min-w-56 rounded-lg"
     >
       <DropdownMenuLabel className="flex flex-col gap-0.5 px-1.5 py-1">
-        <span className="text-sm font-medium">{currentUser.name}</span>
+        <span className="text-sm font-medium">{name}</span>
         <span className="text-xs font-normal text-muted-foreground">
-          {currentUser.email}
+          {email}
         </span>
       </DropdownMenuLabel>
       <DropdownMenuSeparator />
@@ -111,7 +150,12 @@ function UserMenuContent({
         </Link>
       </DropdownMenuItem>
       <DropdownMenuSeparator />
-      <DropdownMenuItem variant="destructive">
+      <DropdownMenuItem
+        variant="destructive"
+        onSelect={() => {
+          void logout();
+        }}
+      >
         <LogOut />
         Log out
       </DropdownMenuItem>

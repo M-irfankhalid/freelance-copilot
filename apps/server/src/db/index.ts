@@ -49,5 +49,30 @@ function ensureSchema(db: Database.Database): void {
       message TEXT NOT NULL,
       meta TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email);
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS backup_codes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL UNIQUE,
+      used_at TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
 }

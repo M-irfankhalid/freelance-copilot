@@ -1,4 +1,5 @@
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import express, { type Express } from "express";
 
 import { env } from "./env.js";
@@ -18,6 +19,7 @@ export function createApp(): Express {
   app.disable("x-powered-by");
   app.use(cors({ origin: env.CLIENT_ORIGIN.split(","), credentials: true }));
   app.use(express.json({ limit: "1mb" }));
+  app.use(cookieParser());
   app.use(requestLogger);
 
   // Feature modules — one router per module, mounted under /api.
