@@ -146,7 +146,8 @@ describe("profile", () => {
           // Freelancer.com self endpoint with profile_description=true and
           // jobs=true returns: username, display_name, hourly_rate,
           // public_name, profile_description (About text string),
-          // location, jobs (array of {id, name, category, seo_url, local}).
+          // location, jobs (array of {id, name, category:{id,name}, seo_url, local}).
+          // Jobs array elements are the user's skill categories on Freelancer.
           return new Response(
             JSON.stringify({
               status: "success",
@@ -158,9 +159,9 @@ describe("profile", () => {
                 profile_description: "Full-stack developer with 5 years experience.",
                 location: { country: { name: "Pakistan" }, city: "Mardan" },
                 jobs: [
-                  { name: "JavaScript", category: "Web Dev" },
-                  { name: "React", category: "Web Dev" },
-                  { name: "Node.js", category: "Web Dev" },
+                  { id: 9, name: "JavaScript", category: { id: 1, name: "Web Dev" }, seo_url: "javascript", local: false },
+                  { id: 759, name: "React.js", category: { id: 1, name: "Web Dev" }, seo_url: "react_js", local: false },
+                  { id: 500, name: "Node.js", category: { id: 1, name: "Web Dev" }, seo_url: "nodejs", local: false },
                 ],
               },
             }),
@@ -192,7 +193,7 @@ describe("profile", () => {
       expect(body.profile.hourlyRate).toBe("$35/hr");
       // profile_description=true maps to about; jobs=true maps skill names to skills.
       expect(body.profile.about).toBe("Full-stack developer with 5 years experience.");
-      expect(body.profile.skills).toEqual(["JavaScript", "React", "Node.js"]);
+      expect(body.profile.skills).toEqual(["JavaScript", "React.js", "Node.js"]);
       // Nothing was stored by the import itself.
       const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
       const after = (await get.json()) as { profile: { title: string | null } | null };
