@@ -10,6 +10,8 @@ import { AuthProvider } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/shared/protected-route";
 import { DashboardErrorBoundary } from "@/pages/dashboard/error";
 import { DashboardLoading } from "@/pages/dashboard/loading";
+import { PlatformsErrorBoundary } from "@/pages/platforms/error";
+import { RouteErrorBoundary } from "@/components/shared/error-boundary";
 import AnalyticsPage from "@/pages/analytics/page";
 import AutomationPage from "@/pages/automation/page";
 import BidsPage from "@/pages/bids/page";
@@ -34,9 +36,9 @@ const DashboardPage = lazy(() => import("@/pages/dashboard/page"));
  * lives inside the sidebar + header shell.
  */
 const router = createBrowserRouter([
-  { path: "/login", element: <LoginPage /> },
-  { path: "/signup", element: <SignupPage /> },
-  { path: "/onboarding", element: <OnboardingPage /> },
+  { path: "/login", element: <LoginPage />, errorElement: <RouteErrorBoundary /> },
+  { path: "/signup", element: <SignupPage />, errorElement: <RouteErrorBoundary /> },
+  { path: "/onboarding", element: <OnboardingPage />, errorElement: <RouteErrorBoundary /> },
   {
     path: "/",
     element: (
@@ -44,6 +46,7 @@ const router = createBrowserRouter([
         <AppLayout />
       </ProtectedRoute>
     ),
+    errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       {
@@ -63,7 +66,14 @@ const router = createBrowserRouter([
       { path: "bids", element: <BidsPage /> },
       { path: "analytics", element: <AnalyticsPage /> },
       { path: "logs", element: <LogsPage /> },
-      { path: "platforms", element: <PlatformsPage /> },
+      {
+        path: "platforms",
+        element: (
+          <PlatformsErrorBoundary>
+            <PlatformsPage />
+          </PlatformsErrorBoundary>
+        ),
+      },
       { path: "automation", element: <AutomationPage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "settings", element: <SettingsPage /> },

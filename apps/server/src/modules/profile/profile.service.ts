@@ -197,32 +197,25 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   const asString = (value: unknown): string | null =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 
-  // Skills arrive as objects or ids depending on the endpoint; accept both.
-  const rawSkills = Array.isArray(r.skills) ? r.skills : [];
-  const skills = rawSkills
-    .map((s) => {
-      if (typeof s === "string") return s;
-      if (typeof s === "object" && s !== null && "name" in s) {
-        return String((s as { name: unknown }).name);
-      }
-      return null;
-    })
-    .filter((s): s is string => s !== null && s.length > 0)
-    .slice(0, 50);
-
+  // Freelancer.com self endpoint only returns these public fields:
+  // id, username, closed, hourly_rate, registration_date, limited_account,
+  // display_name, location, role, chosen_role, status, primary_currency,
+  // primary_language, public_name, pool_ids, enterprise_ids, etc.
+  // It does NOT return tagline, profile_description, skills, or overview.
+  // We only map what exists; title/about/skills must be entered manually.
   const draft = profileSchema.parse({
     freelancerUsername: asString(r.username),
     name: asString(r.display_name) ?? asString(r.username),
-    title: asString(r.tagline) ?? asString(r.profile_text_short),
+    title: asString(r.public_name),
     hourlyRate:
       typeof r.hourly_rate === "number" ? `$${r.hourly_rate}/hr` : null,
-    about: asString(r.profile_description) ?? asString(r.overview),
-    skills,
+    about: null, // API does not expose profile_description; user enters manually.
+    skills: [],
     experience: [],
     portfolio: [],
     certifications: [],
     preferredProjectTypes: [],
-    wants: skills.slice(0, 6),
+    wants: [],
     notWants: [],
     customInstructions: null,
   });

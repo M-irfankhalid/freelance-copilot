@@ -75,7 +75,7 @@ type TestFeedback =
   | null;
 
 export default function PlatformsPage() {
-  const credentials = useApi<CredentialSummary[]>("/api/credentials");
+  const credentials = useApi<{ credentials: CredentialSummary[] }>("/api/credentials");
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<TestFeedback>(null);
@@ -84,8 +84,10 @@ export default function PlatformsPage() {
   const [savingReplace, setSavingReplace] = useState(false);
   const [replaceError, setReplaceError] = useState<string | null>(null);
 
+  const credentialsList = credentials.data?.credentials ?? [];
+
   const models = useApi<{ models: AiModelOption[] }>(
-    credentials.data?.some((c) => c.id === "openrouter" && c.connected)
+    credentialsList.some((c) => c.id === "openrouter" && c.connected)
       ? "/api/credentials/openrouter/models"
       : null
   );
@@ -150,7 +152,7 @@ export default function PlatformsPage() {
     }
   };
 
-  const list = credentials.data ?? [];
+  const list = credentialsList;
 
   return (
     <div className="flex flex-col gap-4 md:gap-6">

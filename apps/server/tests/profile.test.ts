@@ -143,16 +143,18 @@ describe("profile", () => {
         const url = String(input);
         if (url.startsWith(baseUrl)) return realFetch(input);
         if (url.includes("freelancer.com/api/users")) {
+          // Freelancer.com self endpoint returns only these public fields:
+          // username, display_name, hourly_rate, location, public_name, etc.
+          // tagline, profile_description, and skills do NOT exist in the API.
           return new Response(
             JSON.stringify({
               status: "success",
               result: {
                 username: "irfan_dev",
                 display_name: "Irfan Developer",
-                tagline: "React and Node specialist",
-                profile_description: "Ten years building web apps.",
+                public_name: "React and Node specialist",
                 hourly_rate: 35,
-                skills: [{ name: "React" }, { name: "Node.js" }, 42, ""],
+                location: { country: { name: "Pakistan" }, city: "Mardan" },
               },
             }),
             { status: 200 }
@@ -181,9 +183,9 @@ describe("profile", () => {
       expect(body.profile.name).toBe("Irfan Developer");
       expect(body.profile.title).toBe("React and Node specialist");
       expect(body.profile.hourlyRate).toBe("$35/hr");
-      // Non-string entries dropped; import seeds wants from skills.
-      expect(body.profile.skills).toEqual(["React", "Node.js"]);
-      expect(body.profile.wants).toEqual(["React", "Node.js"]);
+      // API does not return skills; those remain empty and must be added manually.
+      expect(body.profile.skills).toEqual([]);
+      expect(body.profile.wants).toEqual([]);
       // Nothing was stored by the import itself.
       const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
       const after = (await get.json()) as { profile: { title: string | null } | null };
