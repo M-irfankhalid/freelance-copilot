@@ -164,12 +164,15 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   }
   const token = decrypt(credRow);
 
+  // Freelancer.com self endpoint supports boolean query parameters to expand
+  // the response. profile_description=true returns the full About text as a
+  // string; jobs=true returns the user's project history (job categories).
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   let response: Response;
   try {
     response = await fetch(
-      "https://www.freelancer.com/api/users/0.1/self/?compact=false",
+      "https://www.freelancer.com/api/users/0.1/self/?compact=false&profile_description=true&jobs=true",
       { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }
     );
   } catch {
@@ -197,20 +200,29 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   const asString = (value: unknown): string | null =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 
-  // Freelancer.com self endpoint only returns these public fields:
-  // id, username, closed, hourly_rate, registration_date, limited_account,
-  // display_name, location, role, chosen_role, status, primary_currency,
-  // primary_language, public_name, pool_ids, enterprise_ids, etc.
-  // It does NOT return tagline, profile_description, skills, or overview.
-  // We only map what exists; title/about/skills must be entered manually.
+  // The self endpoint returns only public profile fields. With
+  // profile_description=true we get the full About text. With jobs=true we get
+  // past project categories (mapped as skills where relevant).
   const draft = profileSchema.parse({
     freelancerUsername: asString(r.username),
     name: asString(r.display_name) ?? asString(r.username),
     title: asString(r.public_name),
     hourlyRate:
       typeof r.hourly_rate === "number" ? `$${r.hourly_rate}/hr` : null,
-    about: null, // API does not expose profile_description; user enters manually.
-    skills: [],
+    about: asString(r.profile_description),
+    skills:
+      Array.isArray(r.jobs)
+        ? r.jobs
+            .filter(
+              (j): j is { name: string } =>
+                j !== null &&
+                typeof j === "object" &&
+                "name" in j &&
+                typeof (j as { name: unknown }).name === "string"
+            )
+            .map((j) => (j as { name: string }).name)
+            .slice(0, 50)
+        : [],
     experience: [],
     portfolio: [],
     certifications: [],

@@ -143,18 +143,25 @@ describe("profile", () => {
         const url = String(input);
         if (url.startsWith(baseUrl)) return realFetch(input);
         if (url.includes("freelancer.com/api/users")) {
-          // Freelancer.com self endpoint returns only these public fields:
-          // username, display_name, hourly_rate, location, public_name, etc.
-          // tagline, profile_description, and skills do NOT exist in the API.
+          // Freelancer.com self endpoint with profile_description=true and
+          // jobs=true returns: username, display_name, hourly_rate,
+          // public_name, profile_description (About text string),
+          // location, jobs (array of {id, name, category, seo_url, local}).
           return new Response(
             JSON.stringify({
               status: "success",
               result: {
                 username: "irfan_dev",
                 display_name: "Irfan Developer",
-                public_name: "React and Node specialist",
+                public_name: "React Developer",
                 hourly_rate: 35,
+                profile_description: "Full-stack developer with 5 years experience.",
                 location: { country: { name: "Pakistan" }, city: "Mardan" },
+                jobs: [
+                  { name: "JavaScript", category: "Web Dev" },
+                  { name: "React", category: "Web Dev" },
+                  { name: "Node.js", category: "Web Dev" },
+                ],
               },
             }),
             { status: 200 }
@@ -181,11 +188,11 @@ describe("profile", () => {
       };
       expect(body.profile.freelancerUsername).toBe("irfan_dev");
       expect(body.profile.name).toBe("Irfan Developer");
-      expect(body.profile.title).toBe("React and Node specialist");
+      expect(body.profile.title).toBe("React Developer");
       expect(body.profile.hourlyRate).toBe("$35/hr");
-      // API does not return skills; those remain empty and must be added manually.
-      expect(body.profile.skills).toEqual([]);
-      expect(body.profile.wants).toEqual([]);
+      // profile_description=true maps to about; jobs=true maps skill names to skills.
+      expect(body.profile.about).toBe("Full-stack developer with 5 years experience.");
+      expect(body.profile.skills).toEqual(["JavaScript", "React", "Node.js"]);
       // Nothing was stored by the import itself.
       const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
       const after = (await get.json()) as { profile: { title: string | null } | null };
