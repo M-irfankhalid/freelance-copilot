@@ -1,5 +1,3 @@
-"use client";
-
 import {
   Sidebar,
   SidebarContent,
@@ -10,14 +8,14 @@ import {
 import { NavMain } from "@/components/layout/nav-main";
 import { NavSecondary } from "@/components/layout/nav-secondary";
 import { UserMenu } from "@/components/layout/user-menu";
-import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { BrandMark } from "@/components/layout/brand-mark";
 import { navMainGroups, navSecondaryItems } from "@/lib/navigation";
 
 export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
-        <WorkspaceSwitcher />
+        <BrandMark />
       </SidebarHeader>
       <SidebarContent>
         <NavMain groups={navMainGroups} />

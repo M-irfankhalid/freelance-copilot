@@ -6,6 +6,7 @@ import { PlatformStatusCard } from "@/components/dashboard/platform-status-card"
 import { RecentBidsCard } from "@/components/dashboard/recent-bids-card";
 import { RecentProposalsCard } from "@/components/dashboard/recent-proposals-card";
 import { getDashboardSnapshot } from "@/lib/data/dashboard";
+import { currentUser } from "@/lib/data/user";
 
 /** Recomputed on mount so the greeting and date context stay accurate. */
 export default function DashboardPage() {
@@ -21,12 +22,13 @@ export default function DashboardPage() {
     month: "long",
     year: "numeric",
   }).format(now);
+  const firstName = currentUser.name.split(" ")[0];
 
   return (
     <div className="flex flex-col gap-4 md:gap-6">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          {greeting}, Muhammad
+          {greeting}, {firstName}
         </h1>
         <p className="text-sm text-muted-foreground">
           {dateLabel} · Here is how your pipeline stands today.

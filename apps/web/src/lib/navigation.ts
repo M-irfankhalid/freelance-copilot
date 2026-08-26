@@ -5,6 +5,7 @@ import {
   Gavel,
   LayoutDashboard,
   PlugZap,
+  ScrollText,
   Settings,
   Target,
   TrendingUp,
@@ -25,20 +26,23 @@ export type NavGroup = {
   items: NavItem[];
 };
 
-/**
- * Primary workspace sections. Routes map 1:1 to the phases in
- * FRONTEND_ROADMAP.md.
- */
+/** Primary workspace sections. */
 export const navMainGroups: NavGroup[] = [
   {
-    title: "Workspace",
+    title: "Work",
     items: [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
       { title: "Jobs", url: "/jobs", icon: Briefcase, badge: "12" },
       { title: "Matches", url: "/matches", icon: Target, badge: "8" },
       { title: "Proposals", url: "/proposals", icon: FileText, badge: "3" },
       { title: "Bids", url: "/bids", icon: Gavel },
+    ],
+  },
+  {
+    title: "Insights",
+    items: [
       { title: "Analytics", url: "/analytics", icon: TrendingUp },
+      { title: "Logs", url: "/logs", icon: ScrollText },
     ],
   },
 ];

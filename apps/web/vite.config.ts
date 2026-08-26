@@ -12,4 +12,10 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  server: {
+    proxy: {
+      // Ready for Phase 3 — frontend calls /api and Vite forwards to Express.
+      "/api": "http://localhost:4000",
+    },
+  },
 });

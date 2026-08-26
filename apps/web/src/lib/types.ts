@@ -4,27 +4,113 @@
  * mock data layer for real API calls never touches the components.
  */
 
-/** Platforms the aggregator can connect to. Freelancer.com ships first. */
-export type PlatformId = "freelancer" | "upwork" | "guru";
+/** Connected services. Freelancer.com and OpenRouter ship first. */
+export type PlatformId = "freelancer" | "openrouter";
 
 export type MatchBand = "strong" | "good" | "fair";
 
-/** A job surfaced in "jobs requiring attention". */
-export interface JobAttentionItem {
+/* ---------------------------------- User --------------------------------- */
+
+export interface CurrentUser {
+  name: string;
+  email: string;
+  initials: string;
+}
+
+/* ---------------------------------- Jobs --------------------------------- */
+
+export type JobSeverity = "urgent" | "warning" | "info";
+
+export type JobStatus = "new" | "analyzed" | "ignored";
+
+export interface JobSummary {
   id: string;
+  /** Freelancer.com project id once synced; internal id before that. */
+  projectId: number;
   title: string;
   client: string;
-  platform: string;
-  /** Composite match score, 0–100. */
-  matchScore: number;
+  clientCountry: string;
   budgetLabel: string;
-  /** Why this job is flagged, e.g. "Closes in 5 hours". */
-  reason: string;
-  severity: "urgent" | "warning" | "info";
+  skills: string[];
+  /** Preformatted relative time, e.g. "2h ago". */
+  postedLabel: string;
+  bidCount: number;
+  avgBidLabel: string;
+  matchScore?: number;
+  severity?: JobSeverity;
+  status: JobStatus;
 }
+
+export interface JobClientInfo {
+  name: string;
+  country: string;
+  memberSinceLabel: string;
+  projectsPosted: number;
+  hireRateLabel: string;
+}
+
+export interface JobAttachment {
+  name: string;
+  sizeLabel: string;
+  kind: "pdf" | "docx" | "zip" | "image" | "code";
+}
+
+/**
+ * Aggregate bid statistics for a job. Cached, never fetched on page view —
+ * the UI shows when it was last refreshed and offers a manual refresh.
+ */
+export interface BidInsights {
+  bidCount: number;
+  avgBidLabel: string;
+  highBidLabel: string;
+  lowBidLabel: string;
+  /** Preformatted age of this snapshot, e.g. "12m ago". */
+  refreshedLabel: string;
+}
+
+/** The agent's read on a job. Grounded in the profile only — no invented facts. */
+export interface JobAiSuggestion {
+  verdict: MatchBand | "poor";
+  score: number;
+  summary: string;
+  reasons: string[];
+  concerns: string[];
+  recommendedBidLabel: string;
+  /** AI summary of aggregate competitor statistics, if bid insights exist. */
+  competitorNote?: string;
+}
+
+export interface JobDetailData extends JobSummary {
+  /** Description paragraphs as provided by the client. */
+  description: string[];
+  clientInfo: JobClientInfo;
+  attachments: JobAttachment[];
+  insights: BidInsights;
+  suggestion: JobAiSuggestion;
+}
+
+/* -------------------------------- Matches -------------------------------- */
+
+export interface MatchItem {
+  id: string;
+  jobId: string;
+  title: string;
+  client: string;
+  budgetLabel: string;
+  postedLabel: string;
+  score: number;
+  band: MatchBand;
+  matchedSkills: string[];
+  missingSkills: string[];
+  concerns: string[];
+  explanation: string;
+}
+
+/* ------------------------------- Proposals ------------------------------- */
 
 export type ProposalStatus =
   | "awaiting_approval"
+  | "draft"
   | "queued"
   | "submitted"
   | "viewed"
@@ -41,6 +127,14 @@ export interface ProposalSummary {
   updatedLabel: string;
 }
 
+export interface ProposalRecord extends ProposalSummary {
+  /** Current draft text shown in the editor. */
+  content: string;
+  createdAtLabel: string;
+}
+
+/* ---------------------------------- Bids --------------------------------- */
+
 export type BidOutcome = "in_review" | "won" | "lost";
 
 export interface BidSummary {
@@ -51,20 +145,150 @@ export interface BidSummary {
   recurring: boolean;
   outcome: BidOutcome;
   submittedLabel: string;
+  /** How the bid was placed. */
+  via: "manual" | "auto";
+  proposalExcerpt?: string;
 }
+
+/* ---------------------------------- Logs --------------------------------- */
+
+export type LogLevel = "debug" | "info" | "success" | "warn" | "error";
+
+export type LogCategory =
+  | "sync"
+  | "analysis"
+  | "proposal"
+  | "bid"
+  | "auth"
+  | "system";
+
+export interface LogEntry {
+  id: string;
+  timeLabel: string;
+  level: LogLevel;
+  category: LogCategory;
+  message: string;
+}
+
+/* ------------------------------- Analytics ------------------------------- */
+
+export interface SeriesPoint {
+  label: string;
+  value: number;
+}
+
+export interface AnalyticsSnapshot {
+  kpis: KpiMetric[];
+  bidsPerWeek: SeriesPoint[];
+  outcomes: { won: number; lost: number; inReview: number };
+  proposalsByStatus: SeriesPoint[];
+}
+
+/* -------------------------------- Platforms ------------------------------ */
 
 export type ConnectionStatus = "connected" | "needs_attention" | "not_connected";
 
-export interface PlatformConnection {
+export interface PlatformCredential {
   id: PlatformId;
   name: string;
-  username?: string;
+  description: string;
   status: ConnectionStatus;
-  /** Preformatted, e.g. "12 min ago". Present when connected. */
-  lastSyncLabel?: string;
-  newJobsToday?: number;
-  /** Call to action shown for unconnected platforms. */
+  /** Masked credential preview, never the real value, e.g. "frl_••••3f9a". */
+  keyPreview?: string;
+  keyInputLabel: string;
+  lastTestedLabel?: string;
   note?: string;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface AiModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  contextLabel: string;
+}
+
+export interface OpenRouterState {
+  selectedModelId: string;
+  models: AiModelOption[];
+  creditLabel: string;
+  usageThisMonthLabel: string;
+}
+
+/* ------------------------------- Automation ------------------------------ */
+
+export interface AutomationSettings {
+  /** Seconds between job scans. Minimum 30, default 60. */
+  scanIntervalSeconds: number;
+  autoAnalyze: boolean;
+  autoMatch: boolean;
+  autoDraft: boolean;
+  autobidEnabled: boolean;
+  minMatchScore: number;
+  minBid: number;
+  maxBid: number;
+  dailyCap: number;
+  bidsToday: number;
+  paused: boolean;
+}
+
+export type AutomationRunResult = "ok" | "skipped" | "error";
+
+export interface AutomationRun {
+  id: string;
+  timeLabel: string;
+  action: string;
+  detail: string;
+  result: AutomationRunResult;
+}
+
+/* --------------------------------- Profile ------------------------------- */
+
+export interface ProfileExperience {
+  role: string;
+  company: string;
+  periodLabel: string;
+  summary: string;
+}
+
+export interface ProfilePortfolioItem {
+  title: string;
+  url: string;
+  description: string;
+}
+
+export interface UserProfile {
+  name: string;
+  email: string;
+  freelancerUsername?: string;
+  title: string;
+  hourlyRateLabel: string;
+  about: string;
+  skills: string[];
+  experience: ProfileExperience[];
+  portfolio: ProfilePortfolioItem[];
+  certifications: string[];
+  preferredProjectTypes: string[];
+  wants: string[];
+  notWants: string[];
+  customInstructions: string;
+  importedFromFreelancer: boolean;
+}
+
+/* -------------------------------- Dashboard ------------------------------ */
+
+/** A job surfaced in "jobs requiring attention". */
+export interface JobAttentionItem {
+  id: string;
+  title: string;
+  client: string;
+  platform: string;
+  /** Composite match score, 0–100. */
+  matchScore: number;
+  budgetLabel: string;
+  /** Why this job is flagged, e.g. "Closes in 5 hours". */
+  reason: string;
+  severity: "urgent" | "warning" | "info";
 }
 
 export type ActivityKind =
@@ -119,7 +343,6 @@ export interface MatchQualitySnapshot {
   bands: MatchQualityBand[];
 }
 
-/** Everything the dashboard renders, fetched as one payload. */
 export interface DashboardSnapshot {
   kpis: KpiMetric[];
   matchQuality: MatchQualitySnapshot;
@@ -129,4 +352,17 @@ export interface DashboardSnapshot {
   bidWinRate: { rate: number; windowLabel: string; submitted: number };
   platforms: PlatformConnection[];
   activity: ActivityEvent[];
+}
+
+/** Lightweight per-platform line used on the dashboard status card. */
+export interface PlatformConnection {
+  id: PlatformId;
+  name: string;
+  username?: string;
+  status: ConnectionStatus;
+  /** Preformatted, e.g. "12 min ago". Present when connected. */
+  lastSyncLabel?: string;
+  newJobsToday?: number;
+  /** Call to action shown for unconnected platforms. */
+  note?: string;
 }

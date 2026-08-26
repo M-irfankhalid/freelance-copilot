@@ -12,21 +12,29 @@ import AnalyticsPage from "@/pages/analytics/page";
 import AutomationPage from "@/pages/automation/page";
 import BidsPage from "@/pages/bids/page";
 import JobsPage from "@/pages/jobs/page";
+import JobDetailPage from "@/pages/jobs/[id]/page";
+import LoginPage from "@/pages/auth/login/page";
+import LogsPage from "@/pages/logs/page";
 import MatchesPage from "@/pages/matches/page";
+import OnboardingPage from "@/pages/onboarding/page";
 import PlatformsPage from "@/pages/platforms/page";
 import ProposalsPage from "@/pages/proposals/page";
 import ProfilePage from "@/pages/profile/page";
 import SettingsPage from "@/pages/settings/page";
+import SignupPage from "@/pages/auth/signup/page";
 import NotFoundPage from "@/pages/not-found";
 
 /** Code-split like the framework routers do, so the skeleton can show. */
 const DashboardPage = lazy(() => import("@/pages/dashboard/page"));
 
 /**
- * Route tree mirrors the Next.js `(app)` route group: every section renders
- * inside the sidebar + header shell.
+ * Route tree. Auth and onboarding screens render standalone; everything else
+ * lives inside the sidebar + header shell.
  */
 const router = createBrowserRouter([
+  { path: "/login", element: <LoginPage /> },
+  { path: "/signup", element: <SignupPage /> },
+  { path: "/onboarding", element: <OnboardingPage /> },
   {
     path: "/",
     element: <AppLayout />,
@@ -43,10 +51,12 @@ const router = createBrowserRouter([
         ),
       },
       { path: "jobs", element: <JobsPage /> },
+      { path: "jobs/:id", element: <JobDetailPage /> },
       { path: "matches", element: <MatchesPage /> },
       { path: "proposals", element: <ProposalsPage /> },
       { path: "bids", element: <BidsPage /> },
       { path: "analytics", element: <AnalyticsPage /> },
+      { path: "logs", element: <LogsPage /> },
       { path: "platforms", element: <PlatformsPage /> },
       { path: "automation", element: <AutomationPage /> },
       { path: "profile", element: <ProfilePage /> },

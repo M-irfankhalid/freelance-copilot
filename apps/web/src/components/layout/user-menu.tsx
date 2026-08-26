@@ -16,14 +16,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
-const currentUser = {
-  name: "Muhammad Irfan",
-  email: "muhammad@novaweb.studio",
-  initials: "MI",
-  initialsClassName: "bg-emerald-600 text-white",
-};
+import { currentUser } from "@/lib/data/user";
 
 /**
  * Account controls shared by the sidebar footer (full row with labels)
@@ -45,7 +38,7 @@ export function UserMenu({
             aria-label="Open account menu"
           >
             <Avatar aria-hidden>
-              <AvatarFallback className={cn("text-xs font-medium", currentUser.initialsClassName)}>
+              <AvatarFallback className="bg-emerald-600 text-xs font-medium text-white">
                 {currentUser.initials}
               </AvatarFallback>
             </Avatar>
@@ -66,9 +59,7 @@ export function UserMenu({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar aria-hidden>
-                <AvatarFallback
-                  className={cn("text-xs font-medium", currentUser.initialsClassName)}
-                >
+                <AvatarFallback className="bg-emerald-600 text-xs font-medium text-white">
                   {currentUser.initials}
                 </AvatarFallback>
               </Avatar>
