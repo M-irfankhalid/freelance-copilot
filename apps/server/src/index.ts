@@ -7,8 +7,8 @@ const log = createLogger("system");
 
 /** Bootstrap: start listening, then shut down cleanly on signals. */
 const app = createApp();
-const server = app.listen(env.PORT, () => {
-  log.info(`Server listening on http://localhost:${env.PORT}`, {
+const server = app.listen(env.SERVER_PORT, () => {
+  log.info(`Server listening on http://localhost:${env.SERVER_PORT}`, {
     nodeEnv: env.NODE_ENV,
     database: env.DATABASE_PATH,
   });

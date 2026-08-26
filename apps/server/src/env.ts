@@ -7,7 +7,9 @@ import { z } from "zod";
  * missing values — fail loudly, never guess.
  */
 const envSchema = z.object({
-  PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+  /** Named SERVER_PORT so hosting tools that inject a generic PORT cannot
+   * accidentally drag the API onto the frontend's port. */
+  SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
