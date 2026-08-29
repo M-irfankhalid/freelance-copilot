@@ -174,7 +174,8 @@ Build bidding.
   • Every auto-bid decision logged
   • Pause and resume controls
 
-## Phase 11, Project Files
+<!-- skip phase 11 for now -->
+<!-- ## Phase 11, Project Files
 
 Add project file analysis.
 
@@ -192,7 +193,7 @@ Flow:
 
 Download → Extract → Inspect → Read → Analyze
 
-Do not send unnecessary files to the AI.
+Do not send unnecessary files to the AI. -->
 
 ## Phase 12, Automation Worker and Logs
 

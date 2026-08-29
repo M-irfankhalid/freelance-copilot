@@ -82,6 +82,7 @@ const validProfile = {
   hourlyRate: "$35/hr",
   about: "I build things.",
   skills: ["React", "Node.js"],
+  skillIds: [759, 500],
   experience: [
     { role: "Dev", company: "Self", periodLabel: "2021 – now", summary: null },
   ],
@@ -223,6 +224,7 @@ describe("profile", () => {
           hourlyRate: string | null;
           about: string | null;
           skills: string[];
+          skillIds: number[];
           portfolio: { title: string; url: string | null; description: string | null }[];
         };
       };
@@ -233,6 +235,7 @@ describe("profile", () => {
       // profile_description=true maps to about; jobs=true maps skill names to skills.
       expect(body.profile.about).toBe("Full-stack developer with 5 years experience.");
       expect(body.profile.skills).toEqual(["JavaScript", "React.js", "Node.js"]);
+      expect(body.profile.skillIds).toEqual([9, 759, 500]);
       // Portfolios fetched from a separate /portfolios/ API call, mapped to title/url/description.
       expect(body.profile.portfolio).toHaveLength(2);
       expect(body.profile.portfolio[0]?.title).toBe("AroundU.Social - Location-Based App");

@@ -47,6 +47,8 @@ export interface JobClientInfo {
   memberSinceLabel: string;
   projectsPosted: number;
   hireRateLabel: string;
+  /** Overall reputation score (0–1) from the owner's profile, if available. */
+  reputationScore?: number | null;
 }
 
 export interface JobAttachment {
@@ -68,6 +70,15 @@ export interface BidInsights {
   refreshedLabel: string;
 }
 
+/** Competition snapshot from stored bid data. */
+export interface CompetitionSummary {
+  bidCount: number;
+  minBid: number | null;
+  maxBid: number | null;
+  medianBid: number | null;
+  isCheapest: boolean;
+}
+
 /** The agent's read on a job. Grounded in the profile only — no invented facts. */
 export interface JobAiSuggestion {
   verdict: MatchBand | "poor";
@@ -80,11 +91,25 @@ export interface JobAiSuggestion {
   competitorNote?: string;
 }
 
+export interface ProjectUpgrades {
+  featured: boolean;
+  urgent: boolean;
+  sealed: boolean;
+}
+
 export interface JobDetailData extends JobSummary {
   /** Description paragraphs as provided by the client. */
   description: string[];
   clientInfo: JobClientInfo;
+  /** Upgrade flags surfaced by the API. */
+  upgrades?: ProjectUpgrades;
+  /** Project billing type: "fixed" | "hourly". */
+  projectType?: string | null;
+  /** Bid period in days, if the project specifies one. */
+  bidPeriod?: number | null;
   attachments: JobAttachment[];
+  /** Aggregate competition data from stored bids, if fetched. */
+  competition?: CompetitionSummary | null;
   insights: BidInsights;
   suggestion: JobAiSuggestion;
 }
@@ -130,6 +155,8 @@ export interface ProposalSummary {
 export interface ProposalRecord extends ProposalSummary {
   /** Current draft text shown in the editor. */
   content: string;
+  /** AI note about bid competition, shown in the list/editor. */
+  competitorNote?: string | null;
   createdAtLabel: string;
 }
 
@@ -158,6 +185,8 @@ export type LogCategory =
   | "sync"
   | "analysis"
   | "proposal"
+  | "proposals"
+  | "ai"
   | "bid"
   | "auth"
   | "system";
@@ -282,6 +311,8 @@ export interface UserProfile {
   hourlyRateLabel: string;
   about: string;
   skills: string[];
+  /** Numeric Freelancer.com skill IDs paired 1:1 with skills. */
+  skillIds?: number[];
   experience: ProfileExperience[];
   portfolio: ProfilePortfolioItem[];
   certifications: string[];
@@ -290,6 +321,7 @@ export interface UserProfile {
   notWants: string[];
   customInstructions: string;
   importedFromFreelancer: boolean;
+  userSummary?: string;
 }
 
 /* -------------------------------- Dashboard ------------------------------ */

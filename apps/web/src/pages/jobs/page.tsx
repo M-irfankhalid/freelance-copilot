@@ -31,24 +31,35 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { jobs as allJobs } from "@/lib/data/jobs";
+import { api, ApiError, NetworkError } from "@/lib/api/client";
+import { useApi } from "@/lib/api/hooks";
 import type { JobSummary } from "@/lib/types";
+
+interface JobsResponse {
+  jobs: JobSummary[];
+}
+
+type StatusFilter = "all" | "new" | "analyzed" | "ignored";
+type SortBy = "newest" | "score" | "budget";
 
 /**
  * Jobs discovered by the sync worker plus anything added manually.
- * Mock refresh simulates a poll finding new work.
+ * On mount the list endpoint pulls the locally-cached rows. Manual add and
+ * the "Scan now" button hit the real backend which talks to Freelancer.com.
  */
 export default function JobsPage() {
-  const [jobs, setJobs] = useState<JobSummary[]>(allJobs);
-  const [refreshing, setRefreshing] = useState(false);
+  const { data, error, isLoading, refetch } = useApi<JobsResponse>("/api/jobs");
+  const jobs = data?.jobs ?? [];
 
-  // Manual add by URL or project id
-  const [manualUrl, setManualUrl] = useState("");
   const [addingManual, setAddingManual] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  const [manualUrl, setManualUrl] = useState("");
 
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [sortBy, setSortBy] = useState("newest");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortBy>("newest");
 
   const visible = useMemo(() => {
     let list = [...jobs];
@@ -72,34 +83,37 @@ export default function JobsPage() {
     return list;
   }, [jobs, query, sortBy, statusFilter]);
 
-  const refresh = () => {
-    setRefreshing(true);
-    window.setTimeout(() => setRefreshing(false), 900);
+  const refresh = async () => {
+    setRefreshError(null);
+    try {
+      // Search returns 20 active jobs and refreshes the local cache.
+      await api<JobsResponse>("/api/jobs/search");
+      refetch();
+    } catch (cause) {
+      setRefreshError(messageFor(cause));
+    }
   };
 
-  const addManual = () => {
+  const addManual = async () => {
     if (!manualUrl.trim() || addingManual) return;
     setAddingManual(true);
-    window.setTimeout(() => {
-      setJobs((current) => [
-        {
-          id: `job-manual-${current.length}`,
-          projectId: 39125999 - current.length,
-          title: "Manually added project — fetching details",
-          client: "Unknown yet",
-          clientCountry: "—",
-          budgetLabel: "—",
-          skills: [],
-          postedLabel: "just now",
-          bidCount: 0,
-          avgBidLabel: "—",
-          status: "new",
-        },
-        ...current,
-      ]);
+    setManualError(null);
+    const url = manualUrl.trim();
+    const body = /^\d+$/.test(url)
+      ? { url: `https://www.freelancer.com/projects/${url}` }
+      : { url };
+    try {
+      await api<{ job: unknown }>("/api/jobs/by-url", {
+        method: "POST",
+        body,
+      });
       setManualUrl("");
+      refetch();
+    } catch (cause) {
+      setManualError(messageFor(cause));
+    } finally {
       setAddingManual(false);
-    }, 800);
+    }
   };
 
   return (
@@ -108,12 +122,18 @@ export default function JobsPage() {
         title="Jobs"
         description="Everything the worker found for your keywords, plus anything you add manually."
         actions={
-          <Button onClick={refresh} disabled={refreshing}>
-            <RefreshCw className={refreshing ? "animate-spin" : undefined} data-icon="inline-start" />
-            {refreshing ? "Scanning…" : "Scan now"}
+          <Button onClick={refresh} disabled={isLoading}>
+            <RefreshCw className={isLoading ? "animate-spin" : undefined} data-icon="inline-start" />
+            {isLoading ? "Scanning…" : "Scan now"}
           </Button>
         }
       />
+
+      {refreshError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {refreshError}
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
@@ -129,7 +149,7 @@ export default function JobsPage() {
             aria-label="Search jobs"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
           <SelectTrigger aria-label="Filter by status">
             <Filter data-icon="inline-start" className="-ml-1 size-4 opacity-60" />
             <SelectValue />
@@ -141,7 +161,7 @@ export default function JobsPage() {
             <SelectItem value="ignored">Ignored</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={sortBy} onValueChange={setSortBy}>
+        <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
           <SelectTrigger aria-label="Sort">
             <SelectValue />
           </SelectTrigger>
@@ -155,26 +175,35 @@ export default function JobsPage() {
 
       {/* Manual add */}
       <form
-        className="flex flex-wrap gap-2 rounded-xl border border-dashed bg-muted/30 p-3"
+        className="flex flex-col gap-2 rounded-xl border border-dashed bg-muted/30 p-3"
         onSubmit={(event) => {
           event.preventDefault();
           addManual();
         }}
       >
-        <Link2 className="mt-2 size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <Input
-          value={manualUrl}
-          onChange={(event) => setManualUrl(event.target.value)}
-          placeholder="Paste a Freelancer.com job URL or project ID to fetch and review it"
-          className="min-w-64 flex-1"
-          aria-label="Job URL or ID"
-        />
-        <Button type="submit" variant="outline" disabled={!manualUrl.trim() || addingManual}>
-          {addingManual ? "Fetching…" : "Add job"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link2 className="mt-2 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <Input
+            value={manualUrl}
+            onChange={(event) => setManualUrl(event.target.value)}
+            placeholder="Paste a Freelancer.com job URL or project ID to fetch and review it"
+            className="min-w-64 flex-1"
+            aria-label="Job URL or ID"
+          />
+          <Button type="submit" variant="outline" disabled={!manualUrl.trim() || addingManual}>
+            {addingManual ? "Fetching…" : "Add job"}
+          </Button>
+        </div>
+        {manualError ? (
+          <p className="text-sm text-destructive">{manualError}</p>
+        ) : null}
       </form>
 
-      {refreshing ? (
+      {error ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          Could not load jobs: {messageFor(error)}
+        </p>
+      ) : isLoading ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {[0, 1].map((key) => (
             <Card key={key}>
@@ -192,12 +221,12 @@ export default function JobsPage() {
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {visible.map((job) => (
-            <Link key={job.id} to={`/jobs/${job.id}`} className="group outline-none">
+            <Link key={job.id} to={`/jobs/${job.projectId}`} className="group outline-none">
               <Card className="h-full transition-shadow group-hover:shadow-md group-focus-visible:ring-3 group-focus-visible:ring-ring/50">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
                     <CardTitle className="group-hover:underline">{job.title}</CardTitle>
-                    {job.matchScore !== undefined ? (
+                    {job.matchScore !== undefined && job.matchScore > 0 ? (
                       <ScoreChip score={job.matchScore} />
                     ) : (
                       <Badge variant="outline" className="shrink-0 text-muted-foreground">
@@ -244,11 +273,19 @@ export default function JobsPage() {
         </div>
       )}
 
-      {!refreshing && visible.length === 0 ? (
+      {!isLoading && !error && visible.length === 0 ? (
         <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
           No jobs match these filters.
         </p>
       ) : null}
     </div>
   );
+}
+
+function messageFor(cause: unknown): string {
+  if (cause instanceof ApiError || cause instanceof NetworkError) {
+    return cause.message;
+  }
+  if (cause instanceof Error) return cause.message;
+  return "Unknown error";
 }

@@ -7,10 +7,14 @@ export type ErrorCode =
   | "BAD_REQUEST"
   | "VALIDATION_ERROR"
   | "UNAUTHORIZED"
+  | "NO_OPENROUTER_KEY"
+  | "AUTH_ERROR"
   | "NOT_FOUND"
   | "CONFLICT"
   | "RATE_LIMITED"
   | "UPSTREAM_ERROR"
+  | "DATABASE_ERROR"
+  | "PROPOSAL_ERROR"
   | "INTERNAL";
 
 /**

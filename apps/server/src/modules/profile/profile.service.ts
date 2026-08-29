@@ -22,6 +22,8 @@ export const profileSchema = z.object({
   hourlyRate: z.string().max(50).nullable(),
   about: z.string().max(10_000).nullable(),
   skills: z.array(z.string().min(1).max(60)).max(50),
+  /** Numeric Freelancer.com skill/category ids paired 1:1 with `skills`. */
+  skillIds: z.array(z.number().int().positive()).max(50),
   experience: z
     .array(
       z.object({
@@ -46,6 +48,7 @@ export const profileSchema = z.object({
   wants: z.array(z.string().min(1).max(60)).max(30),
   notWants: z.array(z.string().min(1).max(60)).max(30),
   customInstructions: z.string().max(5_000).nullable(),
+  userSummary: z.string().max(10_000).nullable().optional(),
 });
 
 export type ProfileData = z.infer<typeof profileSchema>;
@@ -57,6 +60,7 @@ interface ProfileRow {
   hourlyRate: string | null;
   about: string | null;
   skills: string | null;
+  skillIds: string | null;
   experience: string | null;
   portfolio: string | null;
   certifications: string | null;
@@ -65,6 +69,7 @@ interface ProfileRow {
   notWants: string | null;
   customInstructions: string | null;
   importedFromFreelancer: string;
+  userSummary: string | null;
 }
 
 function parseJsonArray(raw: string | null): unknown[] {
@@ -95,6 +100,9 @@ export function getProfile(userId: string): ProfileData | null {
     hourlyRate: r.hourlyRate,
     about: r.about,
     skills: parseJsonArray(r.skills),
+    skillIds: parseJsonArray(r.skillIds).filter(
+      (v): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
+    ),
     experience: parseJsonArray(r.experience),
     portfolio: parseJsonArray(r.portfolio),
     certifications: parseJsonArray(r.certifications),
@@ -102,6 +110,7 @@ export function getProfile(userId: string): ProfileData | null {
     wants: parseJsonArray(r.wants),
     notWants: parseJsonArray(r.notWants),
     customInstructions: r.customInstructions,
+    userSummary: r.userSummary,
   });
   return parsed.success ? parsed.data : null;
 }
@@ -116,6 +125,7 @@ export function saveProfile(userId: string, data: ProfileData): void {
     hourlyRate: data.hourlyRate,
     about: data.about,
     skills: JSON.stringify(data.skills),
+    skillIds: JSON.stringify(data.skillIds),
     experience: JSON.stringify(data.experience),
     portfolio: JSON.stringify(data.portfolio),
     certifications: JSON.stringify(data.certifications),
@@ -123,6 +133,7 @@ export function saveProfile(userId: string, data: ProfileData): void {
     wants: JSON.stringify(data.wants),
     notWants: JSON.stringify(data.notWants),
     customInstructions: data.customInstructions,
+    userSummary: data.userSummary ?? null,
     updatedAt: now,
   };
   const existing = getDb()
@@ -187,7 +198,7 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   let selfResponse: Response;
   try {
     selfResponse = await fetch(
-      "https://www.freelancer.com/api/users/0.1/self/?compact=false&profile_description=true&jobs=true",
+      "https://www.freelancer.com/api/users/0.1/self/?compact=false&avatar=true&country_details=true&profile_description=true&display_info=true&jobs=true&membership_details=true&location_details=true&portfolio_details=true&preferred_details=true&cover_image=true&past_cover_images=true&mobile_tracking=true&user_recommendations=true&sanction_details=true&rising_star=true&shareholder_details=true",
       { headers: authHeaders, signal: controller.signal }
     );
   } catch {
@@ -269,6 +280,28 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     }
   }
 
+  // Build skills and skill IDs from the real API. The self endpoint returns
+  // jobs[] as { id, name, category, ... } — we store the names for display
+  // matching and the numeric IDs for direct use in the jobs search API
+  // (jobs[]=id) without relying on the incomplete manual name-to-id table.
+  const skillObjects = Array.isArray(r.jobs)
+    ? r.jobs
+        .filter(
+          (j): j is { id: number; name: string } =>
+            j !== null &&
+            typeof j === "object" &&
+            typeof (j as { id?: unknown }).id === "number" &&
+            Number.isInteger((j as { id?: unknown }).id) &&
+            typeof (j as { name?: unknown }).name === "string"
+        )
+        .map((j) => ({ id: j.id, name: j.name.trim() }))
+        .filter((s) => s.name.length > 0)
+        .slice(0, 50)
+    : [];
+
+  const skillsData = skillObjects.map((s) => s.name);
+  const skillIdsData = skillObjects.map((s) => s.id);
+
   // The self endpoint returns only public profile fields. With
   // profile_description=true we get the full About text. With jobs=true we get
   // the user's skill/job categories (name field).
@@ -279,19 +312,8 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     hourlyRate:
       typeof r.hourly_rate === "number" ? `$${r.hourly_rate}/hr` : null,
     about: asString(r.profile_description),
-    skills:
-      Array.isArray(r.jobs)
-        ? r.jobs
-            .filter(
-              (j): j is { name: string } =>
-                j !== null &&
-                typeof j === "object" &&
-                "name" in j &&
-                typeof (j as { name: unknown }).name === "string"
-            )
-            .map((j) => (j as { name: string }).name)
-            .slice(0, 50)
-        : [],
+    skills: skillsData,
+    skillIds: skillIdsData,
     experience: [],
     portfolio,
     certifications: [],

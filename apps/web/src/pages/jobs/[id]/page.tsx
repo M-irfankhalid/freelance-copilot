@@ -1,22 +1,11 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import {
-  ArrowLeft,
-  Bot,
-  CircleCheck,
-  Eye,
-  FileText,
-  Globe,
-  Paperclip,
-  RefreshCw,
-  Sparkles,
-  ThumbsDown,
-  TriangleAlert,
-  Trophy,
-  Users,
+  ArrowLeft, Bot, CircleCheck, Clock, Eye, FileText, Globe,
+  RefreshCw, Send, Sparkles, ThumbsDown, TriangleAlert, Users,
 } from "lucide-react";
 
-import { MatchBandBadge } from "@/components/shared/badges";
+import { ScoreChip } from "@/components/shared/badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,28 +17,68 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getJobDetail } from "@/lib/data/jobs";
+import { api, ApiError, NetworkError } from "@/lib/api/client";
+import { useApi } from "@/lib/api/hooks";
+import type { JobDetailData } from "@/lib/types";
+import { Textarea } from "@/components/ui/textarea";
+
+interface JobDetailResponse {
+  job: JobDetailData;
+}
+
+interface AnalysisResponse {
+  analysis: {
+    relevancyScore: number;
+    matchedSkills: string[];
+    missingSkills: string[];
+    concerns: string[];
+    analysis: string;
+    recommendedBid: string;
+  };
+}
 
 /**
  * Full job view styled like Freelancer.com's own project page, extended with
- * the agent's grounded suggestion and a cached bid-insights card that only
- * refreshes on demand.
+ * the agent's grounded suggestion. Data comes from the real backend, which
+ * fetches project details from Freelancer.com and stores analysis locally.
  */
 export default function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const job = id ? getJobDetail(id) : undefined;
+  const projectId = id !== undefined && /^\d+$/.test(id) ? Number(id) : null;
+  const path = projectId !== null ? `/api/jobs/${projectId}` : null;
+  const { data, error, isLoading, refetch } = useApi<JobDetailResponse>(path);
+  const job = data?.job ?? null;
 
-  // Cached insights age — refresh simulates one fresh API call.
-  const [refreshedLabel, setRefreshedLabel] = useState(job?.insights.refreshedLabel ?? "");
-  const [refreshing, setRefreshing] = useState(false);
+  const [proposalText, setProposalText] = useState("");
+  const [bidAmount, setBidAmount] = useState("");
+  const [deliveryTime, setDeliveryTime] = useState("2 weeks");
+  const [generatingProposal, setGeneratingProposal] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const [placingBid, setPlacingBid] = useState(false);
+  const [bidError, setBidError] = useState<string | null>(null);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [ignored, setIgnored] = useState(false);
+  const [ignoreError, setIgnoreError] = useState<string | null>(null);
+  const [refreshedLabel, setRefreshedLabel] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
 
-  if (!job) {
+  if (projectId === null) {
+    return <JobNotFound />;
+  }
+
+  if (isLoading && job === null) {
+    return <JobDetailSkeleton />;
+  }
+
+  if (error !== null || job === null) {
     return (
       <div className="flex flex-col items-center gap-3 py-20 text-center">
         <p className="text-sm text-muted-foreground">
-          This job could not be found. It may have been removed by the client.
+          {error !== null ? messageFor(error) : "This job could not be found."}
         </p>
         <Button variant="outline" asChild>
           <Link to="/jobs">
@@ -61,13 +90,106 @@ export default function JobDetailPage() {
     );
   }
 
-  const refreshInsights = () => {
+  const runAnalyze = async () => {
+    if (analyzing) return;
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      await api<AnalysisResponse>(`/api/jobs/${projectId}/analyze`, {
+        method: "POST",
+      });
+      refetch();
+    } catch (cause) {
+      setAnalyzeError(messageFor(cause));
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const runIgnore = async () => {
+    setIgnoreError(null);
+    try {
+      await api<{ ok: true }>(`/api/jobs/${projectId}/ignore`, {
+        method: "POST",
+      });
+      setIgnored(true);
+      refetch();
+    } catch (cause) {
+      setIgnoreError(messageFor(cause));
+    }
+  };
+
+  const generateProposalWithAI = async () => {
+    if (generatingProposal || !projectId) return;
+    setGeneratingProposal(true);
+    setProposalError(null);
+    try {
+      const response = await api<{ proposal: { content: string; competitorNote?: string } }>(
+        `/api/proposals/generate`,
+        {
+          method: "POST",
+          body: {
+            jobId: `job-${projectId}`,
+            projectId,
+            jobTitle: job.title,
+            clientName: job.client,
+            description: job.description,
+            jobSkills: job.skills,
+            bidStats: {
+              bidCount: job.bidCount,
+              avgBid: job.avgBidLabel,
+              highBid: job.insights.highBidLabel,
+              lowBid: job.insights.lowBidLabel,
+            },
+            projectType: job.projectType,
+            bidPeriod: job.bidPeriod,
+            upgrades: job.upgrades,
+            competition: job.competition,
+          },
+        }
+      );
+      setProposalText(response.proposal.content);
+    } catch (cause) {
+      setProposalError(messageFor(cause));
+    } finally {
+      setGeneratingProposal(false);
+    }
+  };
+
+  const placeBid = async () => {
+    if (placingBid || !projectId || !proposalText.trim()) return;
+    setPlacingBid(true);
+    setBidError(null);
+    try {
+      const bidValue = bidAmount ? parseInt(bidAmount.replace(/[^0-9]/g, ""), 10) || 0 : 0;
+      await api<{ ok: true; proposalId?: string }>(`/api/proposals`, {
+        method: "POST",
+        body: {
+          jobId: `job-${projectId}`,
+          projectId,
+          jobTitle: job.title,
+          client: job.client,
+          content: proposalText,
+          bidAmount: bidValue > 0 ? bidValue : undefined,
+        },
+      });
+      alert("Proposal submitted! You can track it in the Proposals page.");
+    } catch (cause) {
+      setBidError(messageFor(cause));
+    } finally {
+      setPlacingBid(false);
+    }
+  };
+
+  const refreshInsights = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    window.setTimeout(() => {
+    try {
+      await refetch();
       setRefreshedLabel("just now");
+    } finally {
       setRefreshing(false);
-    }, 900);
+    }
   };
 
   return (
@@ -97,10 +219,25 @@ export default function JobDetailPage() {
                 <Users aria-hidden />
                 {job.bidCount} bids · avg {job.avgBidLabel}
               </span>
+              {job.projectType ? (
+                <span className="inline-flex items-center gap-1">
+                  <Badge variant="outline" className="font-normal text-xs">
+                    {job.projectType === "fixed" ? "Fixed price" : "Hourly"}
+                  </Badge>
+                </span>
+              ) : null}
+              {job.bidPeriod ? (
+                <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                  <Clock aria-hidden />
+                  {job.bidPeriod} day{job.bidPeriod > 1 ? "s" : ""} bid period
+                </span>
+              ) : null}
               <span>Project #{job.projectId}</span>
             </div>
           </div>
-          {job.matchScore !== undefined ? <ScoreHeader score={job.matchScore} /> : null}
+          {job.matchScore !== undefined && job.matchScore > 0 ? (
+            <ScoreChip score={job.matchScore} />
+          ) : null}
         </div>
       </div>
 
@@ -140,42 +277,101 @@ export default function JobDetailPage() {
             </CardHeader>
             <CardContent>
               <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 text-sm sm:grid-cols-[auto_1fr_auto_1fr]">
+                <dt className="text-muted-foreground">Country</dt>
+                <dd>{job.clientInfo.country}</dd>
                 <dt className="text-muted-foreground">Member since</dt>
                 <dd>{job.clientInfo.memberSinceLabel}</dd>
                 <dt className="text-muted-foreground">Projects posted</dt>
                 <dd>{job.clientInfo.projectsPosted}</dd>
                 <dt className="text-muted-foreground">Hire rate</dt>
                 <dd>{job.clientInfo.hireRateLabel}</dd>
-                <dt className="text-muted-foreground">Payment</dt>
-                <dd className="inline-flex items-center gap-1 text-success">
-                  <CircleCheck aria-hidden className="size-4" />
-                  Verified
-                </dd>
+                {job.clientInfo.reputationScore !== undefined &&
+                job.clientInfo.reputationScore !== null ? (
+                  <>
+                    <dt className="text-muted-foreground">Reputation</dt>
+                    <dd>{Math.round(job.clientInfo.reputationScore * 100)}%</dd>
+                  </>
+                ) : null}
               </dl>
             </CardContent>
           </Card>
-
-          {job.attachments.length > 0 ? (
-            <Card>
+          {/* proposal editor */}
+          <div className="flex flex-col gap-3">
+            {/* Proposal composer — inline, does not navigate away */}
+            <Card className="border-primary/25 bg-card ring-primary/15">
               <CardHeader>
-                <CardTitle>Attachments</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FileText className="size-4 text-primary" aria-hidden />
+                  Write or generate proposal
+                </CardTitle>
                 <CardDescription>
-                  The agent can download and inspect these during analysis.
+                  Compose directly here. The AI can generate a proposal using your profile facts and this job's details.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col divide-y">
-                {job.attachments.map((file) => (
-                  <div key={file.name} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
-                    <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                    <span className="truncate font-mono text-sm">{file.name}</span>
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                      {file.sizeLabel}
-                    </span>
+              <CardContent className="flex flex-col gap-3">
+                {/* Bid amount and time duration */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="bid-amount" className="text-xs font-medium">Bid amount ($)</Label>
+                    <Input
+                      id="bid-amount"
+                      type="number"
+                      placeholder="e.g. 2500"
+                      className="h-9"
+                      value={bidAmount}
+                      onChange={(e) => setBidAmount(e.target.value)}
+                    />
                   </div>
-                ))}
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="delivery-time" className="text-xs font-medium">Delivery time</Label>
+                    <div className="relative h-9">
+                      <Clock className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                      <Input
+                        id="delivery-time"
+                        placeholder="e.g. 2 weeks"
+                        className="h-9 pl-8"
+                        value={deliveryTime}
+                        onChange={(e) => setDeliveryTime(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Proposal text area */}
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="proposal-text" className="text-xs font-medium">Proposal text</Label>
+                  <Textarea
+                    id="proposal-text"
+                    rows={6}
+                    placeholder="Write your proposal here, or click 'Generate with AI' below..."
+                    className="resize-none text-sm leading-relaxed"
+                    value={proposalText}
+                    onChange={(e) => setProposalText(e.target.value)}
+                  />
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={generateProposalWithAI} disabled={generatingProposal}>
+                    <Bot data-icon="inline-start" className={generatingProposal ? "animate-spin" : "size-4"} />
+                    {generatingProposal ? "Generating…" : "Generate with AI"}
+                  </Button>
+                  <Button size="sm" onClick={placeBid} disabled={placingBid}>
+                    <Send data-icon="inline-start" className="size-4" />
+                    {placingBid ? "Submitting…" : "Place bid"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
-          ) : null}
+
+            {/* Proposal and bid errors */}
+            {proposalError ? (
+              <p className="text-sm text-destructive">{proposalError}</p>
+            ) : null}
+            {bidError ? (
+              <p className="text-sm text-destructive">{bidError}</p>
+            ) : null}
+          </div>
         </div>
 
         {/* Right rail */}
@@ -187,7 +383,13 @@ export default function JobDetailPage() {
                 Agent suggestion
               </CardTitle>
               <CardAction>
-                <MatchBandBadge band={verdictToBand(job.suggestion.verdict)} />
+                {job.matchScore !== undefined && job.matchScore > 0 ? (
+                  <ScoreChip score={job.matchScore} />
+                ) : (
+                  <Badge variant="outline" className="font-normal text-muted-foreground">
+                    Not analyzed
+                  </Badge>
+                )}
               </CardAction>
               <CardDescription>{job.suggestion.summary}</CardDescription>
             </CardHeader>
@@ -206,12 +408,16 @@ export default function JobDetailPage() {
                   Why it fits
                 </p>
                 <ul className="flex flex-col gap-1.5">
-                  {job.suggestion.reasons.map((reason) => (
-                    <li key={reason} className="flex gap-2 text-sm">
-                      <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
-                      {reason}
-                    </li>
-                  ))}
+                  {job.suggestion.reasons.length > 0 ? (
+                    job.suggestion.reasons.map((reason) => (
+                      <li key={reason} className="flex gap-2 text-sm">
+                        <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
+                        {reason}
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">No reasons yet.</li>
+                  )}
                 </ul>
               </div>
 
@@ -220,12 +426,16 @@ export default function JobDetailPage() {
                   Watch out for
                 </p>
                 <ul className="flex flex-col gap-1.5">
-                  {job.suggestion.concerns.map((concern) => (
-                    <li key={concern} className="flex gap-2 text-sm">
-                      <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
-                      {concern}
-                    </li>
-                  ))}
+                  {job.suggestion.concerns.length > 0 ? (
+                    job.suggestion.concerns.map((concern) => (
+                      <li key={concern} className="flex gap-2 text-sm">
+                        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
+                        {concern}
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">No concerns flagged.</li>
+                  )}
                 </ul>
               </div>
 
@@ -240,6 +450,10 @@ export default function JobDetailPage() {
                   </div>
                 </>
               ) : null}
+
+              {analyzeError ? (
+                <p className="text-sm text-destructive">{analyzeError}</p>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -247,7 +461,7 @@ export default function JobDetailPage() {
             <CardHeader>
               <CardTitle>Bid insights</CardTitle>
               <CardDescription>
-                Updated {refreshedLabel}. Not fetched on page load — refresh on demand.
+                Updated {refreshedLabel ?? job.postedLabel}. Refresh to re-pull live stats.
               </CardDescription>
               <CardAction>
                 <Button
@@ -276,20 +490,97 @@ export default function JobDetailPage() {
           </Card>
 
           <div className="flex flex-col gap-2">
-            <Button size="lg" asChild>
-              <Link to="/proposals?compose=1">
-                <FileText data-icon="inline-start" />
-                Generate proposal
-              </Link>
+            <Button size="lg" onClick={runAnalyze} disabled={analyzing}>
+              <Sparkles data-icon="inline-start" className={analyzing ? "animate-pulse" : undefined} />
+              {analyzing ? "Analyzing…" : job.matchScore !== undefined && job.matchScore > 0 ? "Re-analyze" : "Analyze"}
+            </Button>
+          <div className="flex flex-col gap-3">
+            {/* Competitor proposal box — aggregate stats, never invented texts */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Users className="size-4 text-muted-foreground" aria-hidden />
+                  Competitor proposals
+                </CardTitle>
+                <CardDescription>
+                  Aggregate bid statistics — never invented proposal texts. Updated {refreshedLabel ?? job.postedLabel}.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {job.competition ? (
+                  <div className="rounded-lg border bg-muted/20 p-4">
+                    <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase mb-2">Competition summary</p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{String(job.competition.bidCount)}</p>
+                        <p className="text-xs text-muted-foreground">Bids</p>
+                      </div>
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{job.competition.minBid !== null ? `$${job.competition.minBid}` : "—"}</p>
+                        <p className="text-xs text-muted-foreground">Lowest</p>
+                      </div>
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{job.competition.maxBid !== null ? `$${job.competition.maxBid}` : "—"}</p>
+                        <p className="text-xs text-muted-foreground">Highest</p>
+                      </div>
+                    </div>
+                    {job.competition.medianBid !== null ? (
+                      <p className="mt-2 text-xs text-muted-foreground">Median bid: <span className="font-medium text-foreground">${job.competition.medianBid}</span></p>
+                    ) : null}
+                    {job.competition.isCheapest ? (
+                      <p className="mt-2 flex items-center gap-1 text-xs text-success">
+                        Your current bid is the cheapest
+                      </p>
+                    ) : null}
+                    <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                      {job.competition.bidCount > 0
+                        ? `${job.competition.bidCount} bids have been placed on this project. The average bid is ${job.insights.avgBidLabel}. To stand out, reference specific skills from the job requirements and mention relevant experience from your profile.`
+                        : "No bids have been placed yet. Being an early bidder can increase visibility."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border bg-muted/20 p-4">
+                    <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase mb-2">Bid insights</p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{String(job.bidCount)}</p>
+                        <p className="text-xs text-muted-foreground">Bids</p>
+                      </div>
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{job.insights.avgBidLabel}</p>
+                        <p className="text-xs text-muted-foreground">Average bid</p>
+                      </div>
+                      <div className="rounded-lg border bg-background p-2">
+                        <p className="text-base font-semibold tabular-nums">{job.insights.highBidLabel}</p>
+                        <p className="text-xs text-muted-foreground">Top bid</p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+                      {job.bidCount > 0
+                        ? `${job.bidCount} bids have been placed on this project. The average bid is ${job.insights.avgBidLabel}. To stand out, reference specific skills from the job requirements and mention relevant experience from your profile.`
+                        : "No bids have been placed yet. Being an early bidder can increase visibility."}
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Button size="lg" onClick={runAnalyze} disabled={analyzing}>
+              <Sparkles data-icon="inline-start" className={analyzing ? "animate-pulse" : undefined} />
+              {analyzing ? "Analyzing…" : job.matchScore !== undefined && job.matchScore > 0 ? "Re-analyze" : "Analyze"}
             </Button>
             <Button
               variant="destructive"
               disabled={ignored}
-              onClick={() => setIgnored(true)}
+              onClick={runIgnore}
             >
               <ThumbsDown data-icon="inline-start" />
               {ignored ? "Ignored" : "Ignore this job"}
             </Button>
+            {ignoreError ? (
+              <p className="text-sm text-destructive">{ignoreError}</p>
+            ) : null}
+          </div>
           </div>
         </div>
       </div>
@@ -297,20 +588,26 @@ export default function JobDetailPage() {
   );
 }
 
-function ScoreHeader({ score }: { score: number }) {
+function JobNotFound() {
   return (
-    <div className="flex items-center gap-2 rounded-xl border bg-card px-3 py-2">
-      <Trophy className="size-4 text-warning" aria-hidden />
-      <div className="leading-tight">
-        <p className="text-lg font-semibold tabular-nums">{score}</p>
-        <p className="text-xs text-muted-foreground">match score</p>
-      </div>
+    <div className="flex flex-col items-center gap-3 py-20 text-center">
+      <p className="text-sm text-muted-foreground">Invalid project id.</p>
+      <Button variant="outline" asChild>
+        <Link to="/jobs">
+          <ArrowLeft data-icon="inline-start" />
+          Back to jobs
+        </Link>
+      </Button>
     </div>
   );
 }
 
-function verdictToBand(verdict: "strong" | "good" | "fair" | "poor") {
-  return verdict === "poor" ? "fair" : verdict;
+function messageFor(cause: unknown): string {
+  if (cause instanceof ApiError || cause instanceof NetworkError) {
+    return cause.message;
+  }
+  if (cause instanceof Error) return cause.message;
+  return "Unknown error";
 }
 
 // Skeleton export kept for route-level Suspense parity with the dashboard.

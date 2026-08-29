@@ -8,6 +8,8 @@ export type LogCategory =
   | "sync"
   | "analysis"
   | "proposal"
+  | "proposals"
+  | "ai"
   | "bid"
   | "auth"
   | "system";

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleCheck, CircleX, Download, Info, Plus, Save, Trash2 } from "lucide-react";
+import { CircleCheck, CircleX, Download, Info, Plus, Save, Sparkles, Trash2 } from "lucide-react";
 
 import { ChipEditor } from "@/components/shared/chip-editor";
 import { PageHeader } from "@/components/shared/page-header";
@@ -35,6 +35,7 @@ const emptyProfile: UserProfile = {
   hourlyRateLabel: "",
   about: "",
   skills: [],
+  skillIds: [],
   experience: [],
   portfolio: [],
   certifications: [],
@@ -42,6 +43,7 @@ const emptyProfile: UserProfile = {
   wants: [],
   notWants: [],
   customInstructions: "",
+  userSummary: "",
   importedFromFreelancer: false,
 };
 
@@ -53,6 +55,7 @@ function toPayload(profile: UserProfile) {
     hourlyRate: profile.hourlyRateLabel.trim().length > 0 ? profile.hourlyRateLabel.trim() : null,
     about: profile.about.trim().length > 0 ? profile.about : null,
     skills: profile.skills,
+    skillIds: profile.skillIds ?? [],
     experience: profile.experience.map((entry) => ({
       role: entry.role,
       company: entry.company,
@@ -72,6 +75,7 @@ function toPayload(profile: UserProfile) {
       profile.customInstructions.trim().length > 0
         ? profile.customInstructions
         : null,
+    userSummary: profile.userSummary?.trim().length > 0 ? profile.userSummary : null,
   };
 }
 
@@ -94,6 +98,7 @@ export default function ProfilePage() {
   const [importNote, setImportNote] = useState<
     { ok: boolean; message: string } | null
   >(null);
+  const [generatingSummary, setGeneratingSummary] = useState(false);
 
   const form: UserProfile =
     override ?? stored.data?.profile ?? emptyProfile;
@@ -115,6 +120,7 @@ export default function ProfilePage() {
           hourlyRate: string | null;
           about: string | null;
           skills: string[];
+          skillIds: number[];
           wants: string[];
         };
       }>("/api/profile/import", { method: "POST" });
@@ -128,6 +134,7 @@ export default function ProfilePage() {
         about: draft.about ?? form.about,
         // Imported skills/wants replace; manual-only sections are preserved.
         skills: draft.skills ?? form.skills,
+        skillIds: draft.skillIds ?? form.skillIds,
         wants: draft.wants ?? form.wants,
         importedFromFreelancer: true,
       });
@@ -139,6 +146,26 @@ export default function ProfilePage() {
       setImportNote({ ok: false, message: errorText(cause, "Import failed") });
     } finally {
       setImporting(false);
+    }
+  };
+
+  const runGenerateSummary = async () => {
+    if (generatingSummary) return;
+    setGeneratingSummary(true);
+    try {
+      const result = await api<{ summary: string }>("/api/ai/summary", {
+        method: "POST",
+        body: {},
+      });
+      // Load the saved summary back into the form so the box updates
+      void stored.refetch();
+      // Show summary in an alert or could store/display it
+      alert(`User summary generated (saved server-side):\n\n${result.summary.substring(0, 500)}...`);
+      void stored.refetch();
+    } catch (cause) {
+      alert(`Failed to generate summary: ${cause instanceof Error ? cause.message : "Unknown error"}`);
+    } finally {
+      setGeneratingSummary(false);
     }
   };
 
@@ -177,13 +204,20 @@ export default function ProfilePage() {
         title="Profile"
         description="Everything proposals may use about you. The agent never invents facts."
         actions={
-          <>
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => void runImport()} disabled={importing}>
               <Download
                 className={importing ? "animate-bounce" : undefined}
                 data-icon="inline-start"
               />
               {importing ? "Fetching…" : "Import from Freelancer.com"}
+            </Button>
+            <Button onClick={runGenerateSummary} disabled={generatingSummary || saving}>
+              <Sparkles
+                className={generatingSummary ? "animate-pulse" : undefined}
+                data-icon="inline-start"
+              />
+              {generatingSummary ? "Generating summary…" : "Generate user summary"}
             </Button>
             <Button onClick={() => void save()} disabled={saving}>
               {justSaved ? (
@@ -193,7 +227,7 @@ export default function ProfilePage() {
               )}
               {justSaved ? "Saved" : saving ? "Saving…" : "Save profile"}
             </Button>
-          </>
+          </div>
         }
       />
 
@@ -506,6 +540,33 @@ export default function ProfilePage() {
 
       <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
         <CardHeader>
+          <CardTitle>User summary (AI-generated)</CardTitle>
+          <CardDescription>
+            A concise professional summary based on your verified profile facts. Used in every AI analysis and proposal.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-lg border bg-background p-3 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
+            {form.userSummary && form.userSummary.trim().length > 0 ? (
+              form.userSummary
+            ) : (
+              <span className="text-muted-foreground">No user summary yet. Click "Generate user summary" below.</span>
+            )}
+          </div>
+        </CardContent>
+        <CardFooter className="justify-end">
+          <Button variant="outline" size="sm" onClick={() => void runGenerateSummary()} disabled={generatingSummary}>
+            <Sparkles
+              className={generatingSummary ? "animate-pulse" : undefined}
+              data-icon="inline-start"
+            />
+            {generatingSummary ? "Generating…" : "Generate user summary"}
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
+        <CardHeader>
           <CardTitle>Custom AI instructions</CardTitle>
           <CardDescription>
             Standing orders the agent follows in every analysis and proposal.
@@ -516,7 +577,7 @@ export default function ProfilePage() {
             id="custom-instructions"
             aria-label="Custom AI instructions"
             rows={5}
-            value={form.customInstructions}
+            value={form.customInstructions || ""}
             onChange={(event) => set("customInstructions", event.target.value)}
             className="bg-background font-mono text-[13px]"
           />

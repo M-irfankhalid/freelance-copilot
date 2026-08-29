@@ -107,6 +107,7 @@ export async function authenticate(
   if (!ok) {
     throw new AppError(401, "UNAUTHORIZED", "Invalid email or password");
   }
+
   return { id: user.id, email: user.email, name: user.name };
 }
 

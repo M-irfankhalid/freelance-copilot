@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 /**
- * Tag-style list editor used for skills, wants, and not-wants.
+ * Tag-style list editor used for skills, wants, not-wants, certifications,
+ * and preferred project types — all of which are simple string arrays.
  * Controlled; duplicates are ignored.
  */
 export function ChipEditor({
@@ -22,7 +23,11 @@ export function ChipEditor({
 
   const add = () => {
     const value = draft.trim();
-    if (!value || values.includes(value)) {
+    if (!value) {
+      setDraft("");
+      return;
+    }
+    if (values.includes(value)) {
       setDraft("");
       return;
     }

@@ -10,6 +10,9 @@ import { healthRouter } from "./modules/health/health.routes.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { credentialsRouter } from "./modules/platforms/credentials.routes.js";
 import { profileRouter } from "./modules/profile/profile.routes.js";
+import { jobsRouter } from "./modules/jobs/jobs.routes.js";
+import { aiRouter } from "./modules/ai/ai.routes.js";
+import { proposalsRouter } from "./modules/proposals/proposals.routes.js";
 import { requireUser } from "./middleware/require-user.js";
 
 /**
@@ -30,6 +33,9 @@ export function createApp(): Express {
   app.use("/api/auth", authRouter);
   app.use("/api/credentials", requireUser, credentialsRouter);
   app.use("/api/profile", requireUser, profileRouter);
+  app.use("/api/jobs", requireUser, jobsRouter);
+  app.use("/api/ai", requireUser, aiRouter);
+  app.use("/api/proposals", requireUser, proposalsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

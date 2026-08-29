@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Bot, Check, PencilLine, RefreshCw, Send } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -30,55 +30,118 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { proposals as allProposals } from "@/lib/data/proposals";
+import { api, ApiError, NetworkError } from "@/lib/api/client";
+import { useApi } from "@/lib/api/hooks";
 import type { ProposalRecord } from "@/lib/types";
+
+interface ProposalsListResponse {
+  proposals: ProposalRecord[];
+}
+
+interface ProposalActionResponse {
+  ok: true;
+  proposal?: ProposalRecord;
+}
 
 /**
  * Proposal pipeline. The approval queue is the heart of it: drafts generated
  * by the agent wait here until a human approves or edits them.
  */
 export default function ProposalsPage() {
-  const [proposals, setProposals] = useState<ProposalRecord[]>(allProposals);
+  const { data, error, isLoading, refetch } = useApi<ProposalsListResponse>(
+    "/api/proposals"
+  );
+  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
   const [editing, setEditing] = useState<ProposalRecord | null>(null);
   const [draftText, setDraftText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (data?.proposals) {
+      setProposals(data.proposals);
+    }
+  }, [data]);
 
   const queue = proposals.filter((p) => p.status === "awaiting_approval");
 
   const openEditor = (proposal: ProposalRecord) => {
     setEditing(proposal);
     setDraftText(proposal.content);
+    setActionError(null);
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editing) return;
-    setProposals((current) =>
-      current.map((p) =>
-        p.id === editing.id ? { ...p, content: draftText, updatedLabel: "just now" } : p
-      )
-    );
-    setEditing(null);
+    setSaving(true);
+    setActionError(null);
+    try {
+      await api<{ ok: true }>(`/api/proposals/${editing.id}`, {
+        method: "PUT",
+        body: {
+          content: draftText,
+        },
+      });
+      setProposals((current) =>
+        current.map((p) =>
+          p.id === editing.id
+            ? { ...p, content: draftText, updatedLabel: "just now" }
+            : p
+        )
+      );
+      setEditing(null);
+    } catch (cause) {
+      setActionError(messageFor(cause));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const approve = (id: string) =>
-    setProposals((current) =>
-      current.map((p) =>
-        p.id === id ? { ...p, status: "queued", updatedLabel: "just now" } : p
-      )
-    );
-
-  const regenerate = (proposal: ProposalRecord) => {
-    setProposals((current) =>
-      current.map((p) =>
-        p.id === proposal.id
-          ? {
-              ...p,
-              content: `${p.content}\n\n— regenerated with a stronger opening line referencing the client's own words.`,
-              updatedLabel: "just now",
-            }
-          : p
-      )
-    );
+  const approve = async (id: string) => {
+    setActionError(null);
+    try {
+      await api<{ ok: true }>(`/api/proposals/${id}/status`, {
+        method: "PUT",
+        body: { status: "queued" },
+      });
+      setProposals((current) =>
+        current.map((p) =>
+          p.id === id ? { ...p, status: "queued", updatedLabel: "just now" } : p
+        )
+      );
+    } catch (cause) {
+      setActionError(messageFor(cause));
+    }
   };
+
+  const regenerate = async (proposal: ProposalRecord) => {
+    setRegeneratingId(proposal.id);
+    setActionError(null);
+    try {
+      await api<{ ok: true }>(`/api/proposals/${proposal.id}/regenerate`, {
+        method: "POST",
+        body: {},
+      });
+      setProposals((current) =>
+        current.map((p) =>
+          p.id === proposal.id ? { ...p, updatedLabel: "just now" } : p
+        )
+      );
+      if (editing?.id === proposal.id) {
+        setDraftText("");
+        refetch();
+      } else {
+        refetch();
+      }
+    } catch (cause) {
+      setActionError(messageFor(cause));
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  const isRegenerating = (id: string) => regeneratingId === id;
 
   return (
     <div className="flex flex-col gap-4 md:gap-6">
@@ -86,6 +149,19 @@ export default function ProposalsPage() {
         title="Proposals"
         description="Agent drafts grounded in your profile. Nothing is sent until you approve."
       />
+
+      {error !== null ? (
+        <p className="text-sm text-destructive">
+          {messageFor(error)} —{" "}
+          <button
+            className="underline"
+            onClick={() => refetch()}
+            disabled={isLoading}
+          >
+            retry
+          </button>
+        </p>
+      ) : null}
 
       <Tabs defaultValue="queue">
         <TabsList>
@@ -120,11 +196,23 @@ export default function ProposalsPage() {
                     {proposal.content.split("\n")[0]}
                   </p>
                   <div className="flex shrink-0 gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => regenerate(proposal)}>
-                      <RefreshCw data-icon="inline-start" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => regenerate(proposal)}
+                      disabled={isRegenerating(proposal.id)}
+                    >
+                      <RefreshCw
+                        data-icon="inline-start"
+                        className={isRegenerating(proposal.id) ? "animate-spin" : undefined}
+                      />
                       Regenerate
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => openEditor(proposal)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEditor(proposal)}
+                    >
                       <PencilLine data-icon="inline-start" />
                       Edit
                     </Button>
@@ -163,7 +251,7 @@ export default function ProposalsPage() {
                       {proposal.client}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      ${proposal.bidAmount.toLocaleString()}
+                      ${proposal.bidAmount}
                     </TableCell>
                     <TableCell>
                       <ProposalStatusBadge status={proposal.status} />
@@ -172,7 +260,11 @@ export default function ProposalsPage() {
                       {proposal.updatedLabel}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="xs" onClick={() => openEditor(proposal)}>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => openEditor(proposal)}
+                      >
                         View / edit
                       </Button>
                     </TableCell>
@@ -217,7 +309,7 @@ export default function ProposalsPage() {
             <Button
               variant="outline"
               onClick={() => editing && regenerate(editing)}
-              disabled={!editing}
+              disabled={!editing || isRegenerating(editing.id)}
             >
               <RefreshCw data-icon="inline-start" />
               Regenerate
@@ -226,14 +318,25 @@ export default function ProposalsPage() {
               <Button variant="outline" onClick={() => setEditing(null)}>
                 Cancel
               </Button>
-              <Button onClick={saveEdit}>
+              <Button onClick={saveEdit} disabled={saving}>
                 <Send data-icon="inline-start" />
-                Save changes
+                {saving ? "Saving…" : "Save changes"}
               </Button>
             </div>
           </DialogFooter>
+          {actionError ? (
+            <p className="text-sm text-destructive">{actionError}</p>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>
   );
+}
+
+function messageFor(cause: unknown): string {
+  if (cause instanceof ApiError || cause instanceof NetworkError) {
+    return cause.message;
+  }
+  if (cause instanceof Error) return cause.message;
+  return "Unknown error";
 }
