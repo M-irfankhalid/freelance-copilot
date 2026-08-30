@@ -51,6 +51,7 @@ export default function JobDetailPage() {
   const path = projectId !== null ? `/api/jobs/${projectId}` : null;
   const { data, error, isLoading, refetch } = useApi<JobDetailResponse>(path);
   const job = data?.job ?? null;
+  console.log(data)
 
   const [proposalText, setProposalText] = useState("");
   const [bidAmount, setBidAmount] = useState("");
@@ -162,7 +163,9 @@ export default function JobDetailPage() {
     setBidError(null);
     try {
       const bidValue = bidAmount ? parseInt(bidAmount.replace(/[^0-9]/g, ""), 10) || 0 : 0;
-      await api<{ ok: true; proposalId?: string }>(`/api/proposals`, {
+
+      // 1. Create a draft proposal from the AI-generated text.
+      const proposalRes = await api<{ proposal: { id: string } }>(`/api/proposals`, {
         method: "POST",
         body: {
           jobId: `job-${projectId}`,
@@ -173,7 +176,24 @@ export default function JobDetailPage() {
           bidAmount: bidValue > 0 ? bidValue : undefined,
         },
       });
-      alert("Proposal submitted! You can track it in the Proposals page.");
+
+      // 2. Approve the proposal so it can be submitted as a bid.
+      await api<{ ok: true }>(`/api/proposals/${proposalRes.proposal.id}/status`, {
+        method: "PUT",
+        body: { status: "approved" },
+      });
+
+      // 3. Place the actual bid on Freelancer.com via the approved proposal.
+      await api<{ bid: { id: string } }>(`/api/bids`, {
+        method: "POST",
+        body: {
+          proposalId: proposalRes.proposal.id,
+          amount: bidValue,
+          period: job.bidPeriod ?? 7,
+        },
+      });
+
+      alert("Bid placed! You can track it in the Bids page.");
     } catch (cause) {
       setBidError(messageFor(cause));
     } finally {

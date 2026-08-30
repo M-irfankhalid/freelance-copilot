@@ -24,8 +24,22 @@ export async function generateUserSummary(
     .get();
 
   // Build real reputation info from profile import data (if reputation stats exist in DB)
-  // For now, we construct from profile facts + any saved reputation info
-  const reputationRaw = profileRow?.userSummary ? (JSON.parse(profileRow.userSummary || "{}").reputation || null) : null;
+  // The userSummary field is stored as plain text, so we defensively parse it
+  // as JSON only if it was previously stored as a structured object. If it's
+  // plain text (the normal case after a profile save), we get no reputation
+  // data and fall back to the "not imported" message.
+  let reputationRaw: { overall?: number; reviews?: number; completion_rate?: number } | null = null;
+  if (profileRow?.userSummary) {
+    try {
+      const parsed = JSON.parse(profileRow.userSummary);
+      if (parsed && typeof parsed === "object" && "reputation" in parsed) {
+        reputationRaw = parsed.reputation as { overall?: number; reviews?: number; completion_rate?: number } | null;
+      }
+    } catch {
+      // userSummary is plain text, not JSON — no structured reputation data.
+      reputationRaw = null;
+    }
+  }
 
   const skillsText = profile.skills.length
     ? profile.skills.join(", ")

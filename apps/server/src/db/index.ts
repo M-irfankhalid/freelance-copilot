@@ -79,6 +79,17 @@ function ensureSchema(db: Database.Database): void {
     }
   }
 
+  // Backfill consecutive_errors column on automation_settings (Phase 12).
+  const autoCols = db
+    .prepare("PRAGMA table_info(automation_settings)")
+    .all() as Array<{ name: string }>;
+  if (autoCols.length > 0) {
+    const autoColNames = new Set(autoCols.map((c) => c.name));
+    if (!autoColNames.has("consecutive_errors")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN consecutive_errors INTEGER NOT NULL DEFAULT 0");
+    }
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS logs (
       id TEXT PRIMARY KEY,
@@ -201,5 +212,51 @@ function ensureSchema(db: Database.Database): void {
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS proposals_user_job_unique ON proposals (user_id, job_id);
+
+    CREATE TABLE IF NOT EXISTS user_bids (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL,
+      proposal_id TEXT REFERENCES proposals (id) ON DELETE SET NULL,
+      job_title TEXT NOT NULL,
+      client TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      milestone_percentage INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'submitted',
+      outcome TEXT,
+      via TEXT NOT NULL DEFAULT 'manual',
+      submitted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      scan_interval_seconds INTEGER NOT NULL DEFAULT 60,
+      auto_analyze INTEGER NOT NULL DEFAULT 0,
+      auto_match INTEGER NOT NULL DEFAULT 0,
+      auto_draft INTEGER NOT NULL DEFAULT 0,
+      autobid_enabled INTEGER NOT NULL DEFAULT 0,
+      min_match_score INTEGER NOT NULL DEFAULT 80,
+      min_bid INTEGER NOT NULL DEFAULT 0,
+      max_bid INTEGER NOT NULL DEFAULT 0,
+      daily_cap INTEGER NOT NULL DEFAULT 5,
+      bids_today INTEGER NOT NULL DEFAULT 0,
+      cap_date TEXT,
+      paused INTEGER NOT NULL DEFAULT 0,
+      consecutive_errors INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 }

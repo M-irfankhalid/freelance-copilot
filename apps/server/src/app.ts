@@ -14,6 +14,10 @@ import { jobsRouter } from "./modules/jobs/jobs.routes.js";
 import { aiRouter } from "./modules/ai/ai.routes.js";
 import { proposalsRouter } from "./modules/proposals/proposals.routes.js";
 import { requireUser } from "./middleware/require-user.js";
+import { bidsRouter } from "./modules/bids/bids.routes.js";
+import { automationRouter } from "./modules/automation/automation.routes.js";
+import { logsRouter } from "./modules/logs/logs.routes.js";
+import { analyticsRouter } from "./modules/analytics/analytics.routes.js";
 
 /**
  * Application factory. Modular monolith: feature modules mount their own
@@ -36,6 +40,10 @@ export function createApp(): Express {
   app.use("/api/jobs", requireUser, jobsRouter);
   app.use("/api/ai", requireUser, aiRouter);
   app.use("/api/proposals", requireUser, proposalsRouter);
+  app.use("/api/bids", requireUser, bidsRouter);
+  app.use("/api/automation", requireUser, automationRouter);
+  app.use("/api/logs", requireUser, logsRouter);
+  app.use("/api/analytics", requireUser, analyticsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

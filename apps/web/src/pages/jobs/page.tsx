@@ -32,28 +32,31 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, NetworkError } from "@/lib/api/client";
-import { useApi } from "@/lib/api/hooks";
-import type { JobSummary } from "@/lib/types";
-
-interface JobsResponse {
-  jobs: JobSummary[];
-}
+import { useInfiniteJobs } from "@/lib/api/hooks";
 
 type StatusFilter = "all" | "new" | "analyzed" | "ignored";
 type SortBy = "newest" | "score" | "budget";
 
 /**
  * Jobs discovered by the sync worker plus anything added manually.
- * On mount the list endpoint pulls the locally-cached rows. Manual add and
- * the "Scan now" button hit the real backend which talks to Freelancer.com.
+ * On mount the hook tries the local DB cache first. If the cache is empty it
+ * automatically scans Freelancer.com for fresh jobs, then switches to reading
+ * cached rows for infinite scroll as the user scrolls.
  */
 export default function JobsPage() {
-  const { data, error, isLoading, refetch } = useApi<JobsResponse>("/api/jobs");
-  const jobs = data?.jobs ?? [];
+  const {
+    jobs,
+    error,
+    isLoading,
+    isFetchingNext,
+    scanning,
+    sentinelRef,
+    reset,
+    scan,
+  } = useInfiniteJobs();
 
   const [addingManual, setAddingManual] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const [manualUrl, setManualUrl] = useState("");
 
@@ -83,14 +86,11 @@ export default function JobsPage() {
     return list;
   }, [jobs, query, sortBy, statusFilter]);
 
-  const refresh = async () => {
-    setRefreshError(null);
+  const handleScan = async () => {
     try {
-      // Search returns 20 active jobs and refreshes the local cache.
-      await api<JobsResponse>("/api/jobs/search");
-      refetch();
-    } catch (cause) {
-      setRefreshError(messageFor(cause));
+      await scan();
+    } catch {
+      // Errors are handled inside the hook; this is a no-op.
     }
   };
 
@@ -108,7 +108,7 @@ export default function JobsPage() {
         body,
       });
       setManualUrl("");
-      refetch();
+      reset();
     } catch (cause) {
       setManualError(messageFor(cause));
     } finally {
@@ -122,18 +122,15 @@ export default function JobsPage() {
         title="Jobs"
         description="Everything the worker found for your keywords, plus anything you add manually."
         actions={
-          <Button onClick={refresh} disabled={isLoading}>
-            <RefreshCw className={isLoading ? "animate-spin" : undefined} data-icon="inline-start" />
-            {isLoading ? "Scanning…" : "Scan now"}
+          <Button onClick={handleScan} disabled={scanning || isLoading}>
+            <RefreshCw
+              className={scanning ? "animate-spin" : undefined}
+              data-icon="inline-start"
+            />
+            {scanning ? "Scanning…" : "Scan now"}
           </Button>
         }
       />
-
-      {refreshError ? (
-        <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {refreshError}
-        </p>
-      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
@@ -203,7 +200,14 @@ export default function JobsPage() {
         <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           Could not load jobs: {messageFor(error)}
         </p>
-      ) : isLoading ? (
+      ) : scanning && jobs.length === 0 ? (
+        <div className="col-span-2 rounded-xl border border-dashed p-10 text-center">
+          <Search className="mx-auto size-10 animate-bounce text-muted-foreground/40" aria-hidden />
+          <p className="mt-3 text-sm text-muted-foreground">
+            Scanning Freelancer.com for fresh jobs…
+          </p>
+        </div>
+      ) : isLoading && jobs.length === 0 ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {[0, 1].map((key) => (
             <Card key={key}>
@@ -220,6 +224,14 @@ export default function JobsPage() {
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
+          {visible.length === 0 ? (
+            <p className="col-span-2 rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
+              No jobs match these filters.{" "}
+              {jobs.length > 0
+                ? "Try adjusting your search — cached jobs exist but none match."
+                : 'Click "Scan now" to discover jobs from Freelancer.com.'}
+            </p>
+          ) : null}
           {visible.map((job) => (
             <Link key={job.id} to={`/jobs/${job.projectId}`} className="group outline-none">
               <Card className="h-full transition-shadow group-hover:shadow-md group-focus-visible:ring-3 group-focus-visible:ring-ring/50">
@@ -270,14 +282,26 @@ export default function JobsPage() {
               </Card>
             </Link>
           ))}
+          {isFetchingNext ? (
+            <>
+              {[0, 1].map((key) => (
+                <Card key={`skeleton-${key}`}>
+                  <CardHeader>
+                    <Skeleton className="h-5 w-3/4" />
+                    <Skeleton className="h-3.5 w-1/2" />
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2">
+                    <Skeleton className="h-3.5 w-1/3" />
+                    <Skeleton className="h-3.5 w-2/3" />
+                  </CardContent>
+                </Card>
+              ))}
+            </>
+          ) : null}
+          {/* Sentinel for infinite scroll — observed by useInfiniteJobs */}
+          <div ref={sentinelRef} className="col-span-2" />
         </div>
       )}
-
-      {!isLoading && !error && visible.length === 0 ? (
-        <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-          No jobs match these filters.
-        </p>
-      ) : null}
     </div>
   );
 }

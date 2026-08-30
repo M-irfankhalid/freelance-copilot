@@ -208,13 +208,20 @@ Add controlled automation.
 
 Automatic bidding remains behind its explicit activation and safety limits.
 
-## Phase 13, Analytics
+## Phase 13, Analytics ✅
 
 Add basic analytics.
 
 • Jobs analyzed, matches, proposals, bids, won projects
 • Success rate, average bid
 • Keep analytics simple
+
+**Completed:**
+- `analytics.service.ts` — `getAnalytics(userId)` computes KPIs, bids-per-week (8-week sliding window), bid outcomes, and proposal status breakdown from local DB
+- `analytics.routes.ts` — `GET /api/analytics` with `requireUser` middleware
+- `app.ts` — mounted router
+- `tests/analytics.test.ts` — 6 tests covering auth, snapshot, outcomes, weekly bucketing, status grouping, and non-empty path
+- `apps/web/src/pages/analytics/page.tsx` — real API integration via `useApi` with loading/error states
 
 ## Future
 
@@ -246,4 +253,4 @@ Possible future features, do not implement until the core product works:
 
 ## Current Phase
 
-Phase 1, Frontend
+Phase 13 complete. Awaiting next phase.

@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { env } from "./env.js";
 import { closeDb } from "./db/index.js";
 import { createLogger } from "./lib/logger.js";
+import { startScheduler, stopScheduler } from "./modules/automation/scheduler.js";
 
 const log = createLogger("system");
 
@@ -14,8 +15,12 @@ const server = app.listen(env.SERVER_PORT, () => {
   });
 });
 
+// Start the automation scheduler (one-user-per-install model).
+startScheduler();
+
 function shutdown(signal: string): void {
   log.info(`${signal} received, shutting down`);
+  stopScheduler();
   server.close(() => {
     closeDb();
     process.exit(0);

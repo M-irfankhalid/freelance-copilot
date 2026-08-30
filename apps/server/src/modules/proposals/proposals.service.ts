@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, type SQL } from "drizzle-orm";
 
 import { getDb } from "../../db/index.js";
 import { proposals, jobs as jobsTable } from "../../db/schema.js";
@@ -162,50 +162,48 @@ export async function listProposals(
   statusFilter?: ProposalStatus
 ): Promise<ProposalResponse[]> {
   try {
-    let rows = getDb()
-      .select()
-      .from(proposals)
-      .where(eq(proposals.userId, userId))
-      .all();
-
+    // Build WHERE conditions so we can apply the status filter in a single
+    // .where() call (Drizzle's query builder is immutable — chaining .where()
+    // twice produces a type error and a no-op at runtime).
+    const conditions: SQL[] = [eq(proposals.userId, userId)];
     if (statusFilter && statusFilter !== "draft") {
-      rows = rows.filter((row) => row.status === statusFilter);
+      conditions.push(eq(proposals.status, statusFilter));
     }
 
-    const responses: ProposalResponse[] = rows.map((row) => {
-      const updatedAt = new Date(row.updatedAt);
-      const createdAt = new Date(row.createdAt);
-      const now = new Date();
-      const diffMsUpdated = now.getTime() - updatedAt.getTime();
-      const diffMsCreated = now.getTime() - createdAt.getTime();
+    // Sort by updatedAt descending at the DB level — the old code sorted by
+    // the relative time label ("2h ago") which produced Invalid Date + NaN.
+    const rows = getDb()
+      .select()
+      .from(proposals)
+      .where(and(...conditions))
+      .orderBy(desc(proposals.updatedAt))
+      .all();
 
-      const formatLabel = (ms: number): string => {
-        const minutes = Math.round(ms / 60000);
-        if (minutes < 60) return `${minutes}m ago`;
-        const hours = Math.round(minutes / 60);
-        if (hours < 24) return `${hours}h ago`;
-        const days = Math.round(hours / 24);
-        if (days < 7) return `${days}d ago`;
-        const weeks = Math.round(days / 7);
-        return `${weeks}w ago`;
-      };
+    const now = Date.now();
 
-      return {
-        id: row.id,
-        jobTitle: row.jobTitle,
-        client: row.client,
-        bidAmount: row.bidAmount ?? null,
-        status: row.status as ProposalStatus,
-        content: row.content,
-        competitorNote: row.competitorNote ?? null,
-        updatedLabel: formatLabel(diffMsUpdated),
-        createdAtLabel: formatLabel(diffMsCreated),
-      };
-    });
+    const formatLabel = (iso: string): string => {
+      const diffMs = now - new Date(iso).getTime();
+      const minutes = Math.round(diffMs / 60000);
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return `${hours}h ago`;
+      const days = Math.round(hours / 24);
+      if (days < 7) return `${days}d ago`;
+      const weeks = Math.round(days / 7);
+      return `${weeks}w ago`;
+    };
 
-    return responses.sort(
-      (a, b) => new Date(b.updatedLabel).getTime() - new Date(a.updatedLabel).getTime()
-    );
+    return rows.map((row) => ({
+      id: row.id,
+      jobTitle: row.jobTitle,
+      client: row.client,
+      bidAmount: row.bidAmount ?? null,
+      status: row.status as ProposalStatus,
+      content: row.content,
+      competitorNote: row.competitorNote ?? null,
+      updatedLabel: formatLabel(row.updatedAt),
+      createdAtLabel: formatLabel(row.createdAt),
+    }));
   } catch (error) {
     log.error("Failed to list proposals:", {
       error: error instanceof Error ? error.message : "Unknown error",

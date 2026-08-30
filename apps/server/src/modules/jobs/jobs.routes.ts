@@ -1,15 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
+import { sql } from "drizzle-orm";
 
 import { parseBody } from "../../lib/validate.js";
 import { requireUser } from "../../middleware/require-user.js";
 import { getProfile } from "../profile/profile.service.js";
+import { getDb } from "../../db/index.js";
+import { jobs as jobsTable } from "../../db/schema.js";
 import {
   searchJobs as searchJobsService,
   getJobById as getJobByIdService,
   getJobByUrl as getJobUrlService,
   analyzeJob as analyzeJobService,
   ignoreJob as ignoreJobService,
+  listStoredJobs,
 } from "./jobs.service.js";
 
 export const jobsRouter = Router();
@@ -144,16 +148,15 @@ jobsRouter.post("/:projectId/ignore", async (req, res, next) => {
 });
 
 /**
- * List the locally stored jobs. Without `?status=` it returns everything
- * that has been imported. Skills filter is a name substring match.
+ * List the locally stored jobs from the DB cache. Does NOT call Freelancer.com.
+ * Supports pagination via ?limit= and ?offset= (defaults: 50, 0).
+ * Supports status filter (?status=new|analyzed|ignored) and skills name
+ * substring filter (?skills=typescript,react).
  */
-jobsRouter.get("/", async (req, res, next) => {
+jobsRouter.get("/", (req, res, next) => {
   try {
     const statusFilter = req.query.status as string | undefined;
-    const skills = splitQueryList(req.query.skills as string | string[] | undefined);
-
-    let jobs = await searchJobsService({});
-
+    let status: "new" | "analyzed" | "ignored" | undefined = undefined;
     if (statusFilter && statusFilter !== "all") {
       const allowed = new Set(["new", "analyzed", "ignored"]);
       if (!allowed.has(statusFilter)) {
@@ -162,17 +165,36 @@ jobsRouter.get("/", async (req, res, next) => {
           .json({ error: { code: "VALIDATION_ERROR", message: "Unknown status filter" } });
         return;
       }
-      jobs = jobs.filter((job) => job.status === statusFilter);
+      status = statusFilter as "new" | "analyzed" | "ignored";
     }
 
-    if (skills && skills.length > 0) {
-      const needles = skills.map((s) => s.toLowerCase());
-      jobs = jobs.filter((job) =>
-        needles.some((n) => job.skills.some((js) => js.toLowerCase().includes(n)))
-      );
-    }
+    const skills = splitQueryList(req.query.skills as string | string[] | undefined);
+    const limit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const offset = req.query.offset !== undefined ? Number(req.query.offset) : undefined;
 
-    res.json({ jobs });
+    const jobs = listStoredJobs({
+      limit: Number.isFinite(limit ?? 0) ? limit : 50,
+      offset: Number.isFinite(offset ?? 0) ? offset : 0,
+      skills,
+      status,
+    });
+
+    const effectiveLimit = Number.isFinite(limit ?? 0) ? limit! : 50;
+    const effectiveOffset = Number.isFinite(offset ?? 0) ? offset! : 0;
+
+    // Count total matching rows (before in-memory skills filter, which is
+    // applied in listStoredJobs and not worth a separate filtered COUNT).
+    const totalRow = getDb()
+      .select({ count: sql`count(*)` })
+      .from(jobsTable)
+      .get();
+    const total = Number(totalRow?.count ?? 0);
+
+    res.json({
+      jobs,
+      total,
+      hasMore: jobs.length === effectiveLimit && effectiveOffset + effectiveLimit < total,
+    });
   } catch (error) {
     next(error);
   }

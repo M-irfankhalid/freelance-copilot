@@ -1,6 +1,6 @@
 import { AppError } from "../../lib/errors.js";
 import { createLogger } from "../../lib/logger.js";
-const log = createLogger("sync");
+const log = createLogger("bid");
 
 /**
  * The fields we actually read off a Freelancer.com project object. The real
@@ -198,6 +198,21 @@ export interface FreelancerBid {
   period?: number;
 }
 
+/** The user's own profile from the /self endpoint. */
+export interface FreelancerSelf {
+  id: number;
+  username?: string;
+  name?: string;
+  email?: string | { email: string; verified: boolean };
+}
+
+/** Response shape from POST /bids. */
+export interface FreelancerBidResponse {
+  bid_id?: number;
+  message?: string;
+  [key: string]: unknown;
+}
+
 export interface JobSearchFilters {
   /** Skill names (best effort — mapped to category ids where possible). */
   skills?: string[];
@@ -359,7 +374,6 @@ export class FreelancerApiClient {
     if (query.length > 0) params.append("query", query);
 
     const ids = filters.skillIds?.filter((n) => Number.isInteger(n) && n > 0) ?? [];
-    console.log(`Searching Freelancer.com jobs with skill IDs: ${ids.join(", ")}`);
     for (const id of ids) params.append("jobs[]", String(id));
 
     params.append("limit", String(filters.limit ?? 20));
@@ -381,7 +395,6 @@ export class FreelancerApiClient {
     params.append("compact", "true");
 
     const url = `${this.baseUrl}/projects/active/?${params.toString()}`;
-    console.log(`Searching Freelancer.com jobs with URL: ${url}`);
 
     let response: Response;
     try {
@@ -683,6 +696,111 @@ export class FreelancerApiClient {
             competitorNote: `${summary.bidCount} bids so far${bidAvg !== null ? ` (avg ${formatMoney(bidAvg)})` : ""}.`,
           },
     };
+  }
+
+  /**
+   * Fetch the authenticated user's own profile (bidder info) from Freelancer.com.
+   * Returns the numeric user id needed for placing bids.
+   */
+  async getSelf(): Promise<FreelancerSelf> {
+    const url = "https://www.freelancer.com/api/users/0.1/self/?compact=true";
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new AppError(
+        502,
+        "UPSTREAM_ERROR",
+        `Failed to reach Freelancer.com: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new AppError(401, "UNAUTHORIZED", "Freelancer.com token was rejected or expired");
+    }
+    if (response.status === 429) {
+      throw new AppError(429, "RATE_LIMITED", "Freelancer.com rate limit exceeded");
+    }
+    if (!response.ok) {
+      throw new AppError(
+        502,
+        "UPSTREAM_ERROR",
+        `Freelancer.com responded with status ${response.status}`
+      );
+    }
+
+    const body = (await response.json()) as {
+      status?: string;
+      result?: FreelancerSelf;
+    };
+    if (body.status !== "success" || body.result === undefined) {
+      throw new AppError(502, "UPSTREAM_ERROR", "Freelancer.com returned an invalid self response");
+    }
+
+    this.noteRateLimit(response);
+    return body.result;
+  }
+
+  /**
+   * Place a bid on a project.
+   * Endpoint: POST /api/projects/0.1/bids
+   * Body: { project_id, bidder_id, amount, period, milestone_percentage, description }
+   */
+  async placeBid(
+    projectId: number,
+    bidderId: number,
+    amount: number,
+    period: number,
+    milestonePercentage: number,
+    description: string
+  ): Promise<FreelancerBidResponse> {
+    const url = `${this.baseUrl}/bids`;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          ...this.authHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+          bidder_id: bidderId,
+          amount,
+          period,
+          milestone_percentage: milestonePercentage,
+          description,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      throw new AppError(
+        502,
+        "UPSTREAM_ERROR",
+        `Failed to reach Freelancer.com: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new AppError(401, "UNAUTHORIZED", "Freelancer.com token was rejected or expired");
+    }
+    if (response.status === 429) {
+      throw new AppError(429, "RATE_LIMITED", "Freelancer.com rate limit exceeded");
+    }
+
+    const body = (await response.json()) as FreelancerBidResponse;
+    if (!response.ok) {
+      const message = body.message ?? `Freelancer.com responded with status ${response.status}`;
+      throw new AppError(400, "BID_REJECTED", message);
+    }
+
+    this.noteRateLimit(response);
+    return body;
   }
 }
 

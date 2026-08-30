@@ -15,6 +15,8 @@ export type ErrorCode =
   | "UPSTREAM_ERROR"
   | "DATABASE_ERROR"
   | "PROPOSAL_ERROR"
+  | "BID_ERROR"
+  | "BID_REJECTED"
   | "INTERNAL";
 
 /**

@@ -2,7 +2,7 @@ import { getDb } from "../../db/index.js";
 import { AppError, notFound } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
 import { createLogger } from "../../lib/logger.js";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, type SQL } from "drizzle-orm";
 import { platformCredentials, jobs as jobsTable, bids as bidsTable } from "../../db/schema.js";
 import { getProfile } from "../profile/profile.service.js";
 import { analyzeJob as analyzeJobWithAI } from "../ai/ai.service.js";
@@ -131,6 +131,89 @@ function storeBids(projectId: number, bids: FreelancerBid[], fetchedAt: string):
       .run();
   }
   log.info(`Stored ${bids.length} bids for project ${projectId}`);
+}
+
+/**
+ * List locally stored jobs from the database cache. Supports optional pagination
+ * (offset/limit) and a skills name-substring filter. Unlike searchJobs, this
+ * never calls the Freelancer.com API — it only reads what has been previously
+ * synced.
+ */
+export function listStoredJobs(
+  filters: {
+    limit?: number;
+    offset?: number;
+    skills?: string[];
+    status?: "new" | "analyzed" | "ignored";
+  } = {}
+): JobSummary[] {
+  const { limit: rawLimit, offset: rawOffset, skills, status } = filters;
+
+  const effectiveLimit = Number.isFinite(rawLimit ?? 0) ? rawLimit! : 50;
+  const effectiveOffset = Number.isFinite(rawOffset ?? 0) ? rawOffset! : 0;
+
+  const db = getDb();
+
+  // Build WHERE conditions (only status is filterable at the DB level;
+  // skills name-substring filtering is applied in-memory after retrieval).
+  const conditions: SQL[] = [];
+  if (status) {
+    conditions.push(eq(jobsTable.status, status));
+  }
+
+  const rows = conditions.length > 0
+    ? db
+        .select()
+        .from(jobsTable)
+        .where(and(...conditions))
+        .orderBy(desc(jobsTable.updatedAt))
+        .limit(effectiveLimit)
+        .offset(effectiveOffset)
+        .all()
+    : db
+        .select()
+        .from(jobsTable)
+        .orderBy(desc(jobsTable.updatedAt))
+        .limit(effectiveLimit)
+        .offset(effectiveOffset)
+        .all();
+
+  let summaries = rows.map((row) => {
+    let parsedSkills: string[] = [];
+    if (row.skills) {
+      try {
+        const parsed = JSON.parse(row.skills);
+        if (Array.isArray(parsed)) parsedSkills = parsed.filter((s): s is string => typeof s === "string");
+      } catch {
+        // fall through with empty array
+      }
+    }
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      title: row.title,
+      client: row.client,
+      clientCountry: row.clientCountry,
+      budgetLabel: row.budgetLabel,
+      skills: parsedSkills,
+      postedLabel: row.postedLabel,
+      bidCount: row.bidCount,
+      avgBidLabel: row.avgBidLabel,
+      matchScore: row.matchScore ?? undefined,
+      severity: (row.severity ?? undefined) as "urgent" | "warning" | "info" | undefined,
+      status: row.status as "new" | "analyzed" | "ignored",
+    };
+  });
+
+  // Apply skills filter (name substring match) after retrieving from DB.
+  if (skills && skills.length > 0) {
+    const needles = skills.map((s) => s.toLowerCase());
+    summaries = summaries.filter((job) =>
+      needles.some((n) => job.skills.some((js) => js.toLowerCase().includes(n)))
+    );
+  }
+
+  return summaries;
 }
 
 export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSummary[]> {
@@ -515,4 +598,69 @@ export async function ignoreJob(projectId: number): Promise<void> {
     throw notFound(`Job with project ID ${projectId} not found`);
   }
   log.info(`Ignored job ${projectId}`);
+}
+
+/**
+ * Decrypt the stored Freelancer.com token and return an authenticated API
+ * client. Shared by any module that needs to make a live API call.
+ */
+export function getFreelancerClient(): FreelancerApiClient {
+  const credRow = getDb()
+    .select()
+    .from(platformCredentials)
+    .where(eq(platformCredentials.id, "freelancer"))
+    .get();
+
+  if (credRow === undefined) {
+    throw new AppError(
+      400,
+      "BAD_REQUEST",
+      "Save a Freelancer.com access token first (Platforms page)"
+    );
+  }
+
+  return new FreelancerApiClient(decrypt(credRow));
+}
+
+/**
+ * Fetch and cache the bidder id (the numeric Freelancer user id needed for
+ * placing bids). The id is cached in the credential row's `meta` JSON so we
+ * only call the /self endpoint once. Shared by bids.service and
+ * automation.service to avoid duplicate code.
+ */
+export async function getBidderId(): Promise<number> {
+  const credRow = getDb()
+    .select()
+    .from(platformCredentials)
+    .where(eq(platformCredentials.id, "freelancer"))
+    .get();
+
+  if (credRow === undefined) {
+    throw new AppError(
+      400,
+      "BAD_REQUEST",
+      "Save a Freelancer.com access token first (Platforms page)"
+    );
+  }
+
+  const meta = credRow.meta ? JSON.parse(credRow.meta) : {};
+  if (meta.bidderId !== undefined) {
+    return meta.bidderId as number;
+  }
+
+  const client = getFreelancerClient();
+  const self = await client.getSelf();
+
+  const newMeta = { ...meta, bidderId: self.id };
+  getDb()
+    .update(platformCredentials)
+    .set({
+      meta: JSON.stringify(newMeta),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(platformCredentials.id, "freelancer"))
+    .run();
+
+  log.info(`Cached Freelancer bidder id: ${self.id}`);
+  return self.id;
 }

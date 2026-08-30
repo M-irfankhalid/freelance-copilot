@@ -151,3 +151,64 @@ export const proposals = sqliteTable("proposals", {
 }, (table) => [
   uniqueIndex("proposals_user_job_unique").on(table.userId, table.jobId),
 ]);
+
+/** The user's own bids on Freelancer.com — distinct from competitor bids. */
+export const userBids = sqliteTable("user_bids", {
+  /** Internal id: "bid-{projectId}-{timestamp}". */
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  projectId: integer("project_id").notNull(),
+  /** Links to the proposal row whose text was submitted, if any. */
+  proposalId: text("proposal_id").references(() => proposals.id, { onDelete: "set null" }),
+  jobTitle: text("job_title").notNull(),
+  client: text("client").notNull(),
+  amount: integer("amount").notNull(),
+  /** Bid period in days. */
+  period: integer("period").notNull(),
+  /** 0–100 percentage of the project placed as a milestone upfront. */
+  milestonePercentage: integer("milestone_percentage").notNull().default(0),
+  description: text("description").notNull(),
+  status: text("status").notNull().default("submitted"),
+  outcome: text("outcome"),
+  via: text("via").notNull().default("manual"),
+  submittedAt: text("submitted_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Per-user automation configuration, disabled by default. */
+export const automationSettings = sqliteTable("automation_settings", {
+  userId: text("user_id")
+    .notNull()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  scanIntervalSeconds: integer("scan_interval_seconds").notNull().default(60),
+  autoAnalyze: integer("auto_analyze").notNull().default(0),
+  autoMatch: integer("auto_match").notNull().default(0),
+  autoDraft: integer("auto_draft").notNull().default(0),
+  autobidEnabled: integer("autobid_enabled").notNull().default(0),
+  minMatchScore: integer("min_match_score").notNull().default(80),
+  minBid: integer("min_bid").notNull().default(0),
+  maxBid: integer("max_bid").notNull().default(0),
+  dailyCap: integer("daily_cap").notNull().default(5),
+  bidsToday: integer("bids_today").notNull().default(0),
+  capDate: text("cap_date"),
+  paused: integer("paused").notNull().default(0),
+  /** Consecutive pipeline errors before auto-pause kicks in. */
+  consecutiveErrors: integer("consecutive_errors").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Log entries for every automation decision. */
+export const automationRuns = sqliteTable("automation_runs", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  action: text("action").notNull(),
+  detail: text("detail").notNull(),
+  result: text("result").notNull(),
+  createdAt: text("created_at").notNull(),
+});

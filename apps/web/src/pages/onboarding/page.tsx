@@ -93,6 +93,7 @@ export default function OnboardingPage() {
     hourlyRate: string | null;
     about: string | null;
     skills: string[] | null;
+    skillIds: number[];
     wants: string[] | null;
   } | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -166,6 +167,7 @@ export default function OnboardingPage() {
           hourlyRate: string | null;
           about: string | null;
           skills: string[];
+          skillIds: number[];
           wants: string[];
         };
       }>("/api/profile/import", { method: "POST" });
@@ -197,6 +199,7 @@ export default function OnboardingPage() {
         hourlyRate: draft?.hourlyRate ?? null,
         about: draft?.about ?? null,
         skills,
+        skillIds: draft?.skillIds ?? [],
         experience: [],
         portfolio: [],
         certifications: [],
