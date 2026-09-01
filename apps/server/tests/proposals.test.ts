@@ -145,6 +145,7 @@ beforeAll(async () => {
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
+      ignoredCountries: [],
       customInstructions: "Keep it professional but concise.",
       userSummary: "Experienced in React and Node.js.",
     }),
@@ -434,6 +435,50 @@ describe("proposals", () => {
       const regenBody = (await regenRes.json()) as { proposal: { content: string } };
       expect(regenBody.proposal.content).toContain("React");
       expect(regenBody.proposal.content.length).toBeGreaterThan(50);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fetches the proposal for a job by jobId", async () => {
+    stubFetchWithAI();
+    try {
+      const genRes = await realFetch(`${baseUrl}/api/proposals/generate`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-byjob`,
+          projectId: PROJECT_ID,
+          jobTitle: "By-job lookup test",
+          clientName: "Client",
+          description: ["Test"],
+          jobSkills: ["React.js"],
+          bidStats: { bidCount: 1 },
+          projectType: null,
+          bidPeriod: null,
+          upgrades: undefined,
+          competition: null,
+        }),
+      });
+      expect(genRes.status).toBe(200);
+      const { proposal } = (await genRes.json()) as { proposal: { id: string; content: string } };
+
+      // Existing job → returns the proposal.
+      const foundRes = await realFetch(`${baseUrl}/api/proposals/job/job-${PROJECT_ID}-byjob`, {
+        headers: authed(),
+      });
+      expect(foundRes.status).toBe(200);
+      const found = (await foundRes.json()) as { proposal: { id: string; content: string } };
+      expect(found.proposal.id).toBe(proposal.id);
+      expect(found.proposal.content.length).toBeGreaterThan(50);
+
+      // Job with no proposal → proposal is null.
+      const missingRes = await realFetch(`${baseUrl}/api/proposals/job/job-missing`, {
+        headers: authed(),
+      });
+      expect(missingRes.status).toBe(200);
+      const missing = (await missingRes.json()) as { proposal: null };
+      expect(missing.proposal).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

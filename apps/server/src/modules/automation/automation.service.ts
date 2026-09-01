@@ -28,8 +28,10 @@ import { MAX_CONSECUTIVE_ERRORS } from "../logs/logs.service.js";
 const log = createLogger("bid");
 
 /** Default bid delivery period (days) and milestone percentage for auto-bids. */
-const DEFAULT_BID_PERIOD = 7;
-const DEFAULT_MILESTONE_PERCENTAGE = 0;
+const DEFAULT_BID_PERIOD = 1;
+// Freelancer.com requires milestone percentage to be in [20, 100]; 0 is
+// rejected upstream, so auto-bids default to a 50% milestone.
+const DEFAULT_MILESTONE_PERCENTAGE = 50;
 
 export type AutomationRunResult = "ok" | "skipped" | "error";
 
@@ -38,8 +40,11 @@ export interface AutomationSettings {
   scanIntervalSeconds: number;
   autoAnalyze: boolean;
   autoMatch: boolean;
-  autoDraft: boolean;
   autobidEnabled: boolean;
+  /**
+   * Minimum relevance score to auto-bid. Proposals are auto-written only for
+   * jobs the pipeline is about to bid on, so this is also the auto-proposal gate.
+   */
   minMatchScore: number;
   minBid: number;
   maxBid: number;
@@ -75,7 +80,6 @@ function rowToSettings(row: {
   scanIntervalSeconds: number;
   autoAnalyze: number;
   autoMatch: number;
-  autoDraft: number;
   autobidEnabled: number;
   minMatchScore: number;
   minBid: number;
@@ -93,7 +97,6 @@ function rowToSettings(row: {
     scanIntervalSeconds: row.scanIntervalSeconds,
     autoAnalyze: row.autoAnalyze === 1,
     autoMatch: row.autoMatch === 1,
-    autoDraft: row.autoDraft === 1,
     autobidEnabled: row.autobidEnabled === 1,
     minMatchScore: row.minMatchScore,
     minBid: row.minBid,
@@ -156,7 +159,6 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
         scanIntervalSeconds: 60,
         autoAnalyze: true,
         autoMatch: true,
-        autoDraft: true,
         autobidEnabled: false,
         minMatchScore: 80,
         minBid: 500,
@@ -177,7 +179,6 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
           scanIntervalSeconds: defaults.scanIntervalSeconds,
           autoAnalyze: defaults.autoAnalyze ? 1 : 0,
           autoMatch: defaults.autoMatch ? 1 : 0,
-          autoDraft: defaults.autoDraft ? 1 : 0,
           autobidEnabled: defaults.autobidEnabled ? 1 : 0,
           minMatchScore: defaults.minMatchScore,
           minBid: defaults.minBid,
@@ -353,11 +354,13 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
     await logRun(
       userId,
       "Auto-bid check",
-      `Daily cap reached (${settings.bidsToday}/${settings.dailyCap})`,
+      `Daily cap reached (${settings.bidsToday}/${settings.dailyCap}) — auto-bidding paused until tomorrow`,
       "skipped"
     );
-    // Pause auto-bidding when cap is reached
-    await saveSettings(userId, { paused: true });
+    // Deliberately do NOT pause the whole worker here: the cap only gates
+    // bidding. `checkAndResetDailyCap` resets `bidsToday` when the date rolls
+    // over, so auto-bidding resumes tomorrow while scanning/analyzing/drafting
+    // keep running in the meantime.
     return;
   }
 
@@ -401,10 +404,20 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
 
     if (!proposal) continue;
 
-    // Clamp bid amount within configured bounds
-    const recommendedBid = parseInt(proposal.bidAmount?.toString() ?? "0", 10);
-    let bidAmount = recommendedBid || Math.floor((settings.minBid + settings.maxBid) / 2);
-    bidAmount = Math.max(settings.minBid, Math.min(settings.maxBid, bidAmount));
+    // Bid amount = the project's minimum budget (for hourly projects, its
+    // hourly minimum). No budget listed → skip; auto-bid can't price it.
+    const { minimumBudget } = parseJobRawData(job.rawData);
+    if (minimumBudget === null) {
+      await logRun(
+        userId,
+        "Auto-bid skipped",
+        `Project ${job.projectId}: no budget minimum — skipped`,
+        "skipped"
+      );
+      continue;
+    }
+    // Clamp the project minimum within the user's configured safety bounds.
+    const bidAmount = Math.max(settings.minBid, Math.min(settings.maxBid, minimumBudget));
 
     // Get bidder id and an authenticated client (shared helpers).
     try {
@@ -533,10 +546,11 @@ function parseJobRawData(rawData: string | null): {
   jobSkills: string[];
   projectType: string | null;
   bidPeriod: number | null;
+  minimumBudget: number | null;
   upgrades?: { featured: boolean; urgent: boolean; sealed: boolean };
 } {
   if (!rawData) {
-    return { description: [], jobSkills: [], projectType: null, bidPeriod: null };
+    return { description: [], jobSkills: [], projectType: null, bidPeriod: null, minimumBudget: null };
   }
   try {
     const project = JSON.parse(rawData) as FreelancerProject;
@@ -555,10 +569,16 @@ function parseJobRawData(rawData: string | null): {
       jobSkills,
       projectType: project.type ?? null,
       bidPeriod: project.bidperiod ?? null,
+      // The project's minimum budget — for hourly projects this is the hourly
+      // minimum. Auto-bid prices off this, so missing/zero means "can't price".
+      minimumBudget:
+        typeof project.budget?.minimum === "number" && project.budget.minimum > 0
+          ? project.budget.minimum
+          : null,
       upgrades,
     };
   } catch {
-    return { description: [], jobSkills: [], projectType: null, bidPeriod: null };
+    return { description: [], jobSkills: [], projectType: null, bidPeriod: null, minimumBudget: null };
   }
 }
 
@@ -577,11 +597,12 @@ export interface PipelineResult {
  * - Validates Freelancer.com credentials via /self
  * - Polls for jobs matching the user's profile skills/wants
  * - Analyzes new jobs if autoAnalyze is on (relevancy filter + AI analysis in `analyzeJob`)
- * - Drafts proposals for analyzed jobs meeting the match-score threshold if autoDraft is on
+ * - Drafts a proposal for each analyzed job that clears the auto-bid threshold — but only
+ *   while auto-bid is on, since a proposal is written solely so the pipeline can bid on it
  * - Runs the auto-bid engine (`runAutoBidCheck`) which respects daily cap, autobid flag, etc.
  * - Tracks consecutive errors and auto-pauses after MAX_CONSECUTIVE_ERRORS failures
  */
-export async function runPipeline(userId: string): Promise<PipelineResult> {
+async function runPipelineInner(userId: string): Promise<PipelineResult> {
   // Step 1: Get settings with daily cap reset.
   const persistedSettings = await getOrCreateSettings(userId);
   const settings = checkAndResetDailyCap(persistedSettings);
@@ -653,6 +674,7 @@ export async function runPipeline(userId: string): Promise<PipelineResult> {
       skillIds: profile.skillIds.length > 0 ? profile.skillIds : undefined,
       keywords: profile.wants.length > 0 ? profile.wants : undefined,
       limit: 20,
+      ignoredCountries: profile.ignoredCountries,
     };
 
     const foundJobs = await searchJobs(searchFilters);
@@ -690,9 +712,11 @@ export async function runPipeline(userId: string): Promise<PipelineResult> {
       await logRun(userId, "Pipeline analyze", "No new jobs to analyze", "ok");
     }
 
-    // Step 7: Draft proposals for high-scoring analyzed jobs.
+    // Step 7: Draft proposals — but only for jobs the pipeline is about to bid
+    // on. Auto-proposals are coupled to auto-bid: when auto-bid is off, no
+    // proposals are written; the user generates them and places bids manually.
     let drafted = 0;
-    if (settings.autoDraft) {
+    if (settings.autobidEnabled) {
       const candidates = getDb()
         .select()
         .from(jobsTable)
@@ -740,20 +764,49 @@ export async function runPipeline(userId: string): Promise<PipelineResult> {
             null // competition — not fetched during pipeline draft
           );
           drafted++;
-        } catch (error) {
+
+          // Approve the draft immediately so Step 9 places the bid this run.
+          getDb()
+            .update(proposalsTable)
+            .set({ status: "approved", updatedAt: new Date().toISOString() })
+            .where(
+              and(
+                eq(proposalsTable.jobId, job.id),
+                eq(proposalsTable.userId, userId)
+              )
+            )
+            .run();
           await logRun(
             userId,
             "Pipeline draft",
-            `Job ${job.projectId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-            "error"
+            `Job ${job.projectId}: proposal auto-approved (score ${job.matchScore} >= ${settings.minMatchScore})`,
+            "ok"
           );
+        } catch (error) {
+          // A 409 means another run (or a manual generate) already drafted this
+          // job — not a failure, just nothing left to do this run.
+          if (error instanceof AppError && error.status === 409) {
+            await logRun(
+              userId,
+              "Pipeline draft",
+              `Job ${job.projectId}: proposal already exists — skipped`,
+              "skipped"
+            );
+          } else {
+            await logRun(
+              userId,
+              "Pipeline draft",
+              `Job ${job.projectId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+              "error"
+            );
+          }
         }
       }
 
       await logRun(
         userId,
         "Pipeline draft",
-        `Drafted ${drafted} proposal(s) for high-score jobs`,
+        `Drafted ${drafted} proposal(s) for jobs meeting the auto-bid threshold`,
         "ok"
       );
     }
@@ -810,5 +863,26 @@ export async function runPipeline(userId: string): Promise<PipelineResult> {
       drafted: 0,
       bidsPlaced: 0,
     };
+  }
+}
+
+/**
+ * Single-flight guard around the pipeline. A manual "Run pipeline now" must
+ * not overlap a scheduled tick: two overlapping runs both pass the proposal-
+ * existence check before the slow AI call, then the second insert trips the
+ * proposals UNIQUE constraint (user_id, job_id).
+ */
+let pipelineInProgress = false;
+
+export async function runPipeline(userId: string): Promise<PipelineResult> {
+  if (pipelineInProgress) {
+    await logRun(userId, "Pipeline", "Another pipeline run is in progress — skipped", "skipped");
+    return { status: "skipped", jobsFound: 0, analyzed: 0, drafted: 0, bidsPlaced: 0 };
+  }
+  pipelineInProgress = true;
+  try {
+    return await runPipelineInner(userId);
+  } finally {
+    pipelineInProgress = false;
   }
 }

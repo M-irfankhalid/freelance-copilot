@@ -56,7 +56,7 @@ export async function placeBid(
   proposalId: string,
   amount: number,
   period: number,
-  milestonePercentage: number = 0
+  milestonePercentage: number = 50
 ): Promise<UserBid> {
   // Verify the proposal exists and belongs to the user
   const proposal = getDb()

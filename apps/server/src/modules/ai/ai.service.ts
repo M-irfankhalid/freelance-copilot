@@ -13,7 +13,12 @@ const log = createLogger("analysis");
 const DEFAULT_MODEL = "openai/gpt-4o-mini";
 
 interface CredentialMeta {
+  /** Legacy single model selection — fallback for both roles. */
   modelId?: string;
+  /** Model used for relevance screening / analysis (Model A). */
+  analysisModelId?: string;
+  /** Model used for proposal writing (Model B). */
+  proposalModelId?: string;
   lastTestMessage?: string;
   usage?: { label: string; used: number; limit: number };
 }
@@ -28,11 +33,12 @@ function parseMeta(raw: string | null): CredentialMeta {
 }
 
 /**
- * Read the user's saved OpenRouter credential and return the model the user
- * has selected, falling back to the default. Returns `null` if no credential
- * is stored at all (caller decides how to react).
+ * Read the user's saved OpenRouter credential and return the model for a
+ * given role, falling back to the legacy single `modelId` then the default.
+ * Returns `null` if no credential is stored at all (caller decides how to
+ * react).
  */
-function readSelectedModel(): string | null {
+function readModel(get: (meta: CredentialMeta) => string | undefined): string | null {
   const row = getDb()
     .select({ meta: platformCredentials.meta })
     .from(platformCredentials)
@@ -40,7 +46,17 @@ function readSelectedModel(): string | null {
     .get();
   if (row === undefined) return null;
   const meta = parseMeta(row.meta);
-  return meta.modelId ?? null;
+  return get(meta) ?? meta.modelId ?? null;
+}
+
+/** Model for relevance screening / analysis — the cheap, fast one. */
+function readAnalysisModel(): string | null {
+  return readModel((m) => m.analysisModelId);
+}
+
+/** Model for proposal writing — the strong one. */
+function readProposalModel(): string | null {
+  return readModel((m) => m.proposalModelId);
 }
 
 export interface ProjectUpgrades {
@@ -89,6 +105,26 @@ export interface AnalysisResult {
   competitorNote: string;
 }
 
+/** Fast relevance gate (Model A). The score becomes the job's match score. */
+export interface RelevancyCheck {
+  relevant: boolean;
+  /** 0–100 match strength. */
+  score: number;
+  reasons: string[];
+  /** One short paragraph explaining the decision. */
+  summary: string;
+}
+
+/** Inputs the relevance model sees: title, description, user summary, instructions. */
+export interface RelevancyPromptData {
+  jobTitle: string;
+  jobDescription: string[];
+  /** Verified user summary from the profile. */
+  userSummary?: string | null;
+  /** Free-text relevancy instructions, e.g. "no web3 or WordPress". */
+  relevancyInstructions?: string | null;
+}
+
 /** Data needed to generate a proposal via AI. */
 export interface ProposalPromptData {
   jobTitle: string;
@@ -120,6 +156,10 @@ export interface ProposalPromptData {
     notWants: string[];
     customInstructions: string | null;
     userSummary?: string | null;
+    /** Markdown summary of the user's portfolio projects. */
+    portfolioSummary?: string | null;
+    /** Markdown block holding all the user's proposal templates. */
+    proposalTemplates?: string | null;
   };
   /** The AI analysis result for this job, if previously analyzed. */
   analysis?: {
@@ -145,6 +185,8 @@ export function buildProposalPrompt(data: ProposalPromptData): string {
     : "  (No portfolio items on file)";
   const certsText = p.certifications.length ? p.certifications.join(", ") : "None listed";
   const customInstr = p.customInstructions || "None";
+  const portfolioSummaryText = p.portfolioSummary?.trim() || "No portfolio summary provided.";
+  const templatesText = p.proposalTemplates?.trim() || "No proposal templates provided.";
 
   const competitionLines: string[] = [];
   if (data.competition) {
@@ -190,6 +232,11 @@ ${portfolioLines}
 Certifications: ${certsText}
 Custom instructions: ${customInstr}
 ${p.userSummary ? `Profile summary: ${p.userSummary}` : ""}
+Portfolio summary:
+${portfolioSummaryText}
+
+=== PROPOSAL TEMPLATES (reference these for tone and structure) ===
+${templatesText}
 
 === JOB ===
 Title: ${data.jobTitle}
@@ -209,9 +256,10 @@ Write a proposal cover message (2–3 paragraphs) that:
 1. Addresses the client by name ("Hi,") and shows you read their project description
 2. Highlights 1–2 matching skills from YOUR profile that directly address their needs
 3. References a specific relevant experience or portfolio item from your profile (if any exist)
-4. Mentions a realistic delivery timeframe
+4. Mentions that price and duration can be discussed later, offering the best price with quality work and fast delivery — do NOT commit to a specific rate or delivery date
 5. Incorporates your custom instructions (if any)
-6. Stays grounded in the facts above — do NOT invent new skills, projects, or client history
+6. Matches the tone and structure of the proposal templates provided (if any)
+7. Stays grounded in the facts above — do NOT invent new skills, projects, or client history
 
 Return ONLY the proposal text. Do not include headings, code blocks, or meta-commentary. Write it as the freelancer would send it on Freelancer.com.
 `.trim();
@@ -290,7 +338,8 @@ Validate your output against the profile facts. If the user lacks required skill
 export async function callOpenRouter(
   systemPrompt: string,
   userPrompt: string,
-  userPreferredModel?: string
+  userPreferredModel?: string,
+  timeoutMs?: number
 ): Promise<string> {
   const credRow = getDb()
     .select()
@@ -307,7 +356,7 @@ export async function callOpenRouter(
   }
 
   const plaintextKey = decrypt(credRow);
-  const model = userPreferredModel ?? readSelectedModel() ?? DEFAULT_MODEL;
+  const model = userPreferredModel ?? readAnalysisModel() ?? DEFAULT_MODEL;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -325,7 +374,10 @@ export async function callOpenRouter(
       ],
       temperature: 0.2,
     }),
-    signal: AbortSignal.timeout(30000),
+    // LLM generation takes far longer than a REST fetch — the prompt includes
+    // the full job description and the response is a structured analysis, so
+    // give the model a generous budget instead of the 30s used for API calls.
+    signal: AbortSignal.timeout(timeoutMs ?? 120_000),
   });
 
   if (response.status === 401) {
@@ -374,6 +426,119 @@ export async function callOpenRouter(
   }
 
   return content;
+}
+
+/**
+ * Validate that AI output is properly structured JSON matching RelevancyCheck.
+ * The fast relevance model (Model A) returns a gate decision, never free-form.
+ */
+export function validateRelevancyOutput(rawText: string): RelevancyCheck {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText.trim());
+  } catch {
+    const match = rawText.match(/```json\n([\s\S]*?)\n```/);
+    if (match && match[1] !== undefined) {
+      try {
+        parsed = JSON.parse(match[1].trim());
+      } catch {
+        parsed = null;
+      }
+    } else {
+      parsed = null;
+    }
+  }
+
+  if (parsed === null || typeof parsed !== "object") {
+    throw new AppError(
+      500,
+      "INTERNAL",
+      "AI relevance output could not be parsed as JSON. The model may have refused or returned an invalid format."
+    );
+  }
+
+  const obj = parsed as Record<string, unknown>;
+
+  if (typeof obj["relevant"] !== "boolean") {
+    throw new AppError(
+      500,
+      "INTERNAL",
+      `AI relevance verdict is invalid: expected boolean, got ${JSON.stringify(obj["relevant"])}`
+    );
+  }
+
+  const score = Number(obj["score"]);
+  if (isNaN(score) || score < 0 || score > 100) {
+    throw new AppError(
+      500,
+      "INTERNAL",
+      `AI relevance score is out of range (0-100): ${JSON.stringify(obj["score"])}`
+    );
+  }
+
+  const reasons = Array.isArray(obj["reasons"])
+    ? obj["reasons"].filter((r) => typeof r === "string" && r.trim().length > 0)
+    : [];
+
+  const summary = typeof obj["summary"] === "string" ? obj["summary"].trim() : "";
+
+  return { relevant: obj["relevant"], score, reasons, summary };
+}
+
+/**
+ * Build the fast relevance prompt. Only the job title, description, the user's
+ * verified summary, and their relevancy instructions reach the model — this is
+ * the cheap gate that runs before any expensive work.
+ */
+export function buildRelevancyPrompt(data: RelevancyPromptData): string {
+  const userSummary = data.userSummary?.trim() || "No user summary provided.";
+  const instructions = data.relevancyInstructions?.trim() || "None.";
+  return `
+You are a fast, low-cost relevance screener for a freelance agent. Decide whether the job below is worth a freelancer's time given their summary and instructions.
+
+=== USER SUMMARY ===
+${userSummary}
+
+=== USER RELEVANCY INSTRUCTIONS ===
+${instructions}
+
+=== JOB TITLE ===
+${data.jobTitle}
+
+=== JOB DESCRIPTION ===
+${data.jobDescription.join("\n")}
+
+Return ONLY a JSON object with exactly these keys:
+- relevant: boolean (true if the job matches, false otherwise)
+- score: number (0-100, how strong the match is)
+- reasons: array of strings (why it does or does not match)
+- summary: string (one short paragraph)
+
+Judge strictly using ONLY the job details and user facts above. Never invent facts about the user. A short description is not a reason to reject a job.
+`.trim();
+}
+
+/**
+ * Run the fast relevance gate (Model A) against a job. The model used is the
+ * user's selected analysis model — the cheap/fast one. Output is strictly
+ * validated before it is used for any decision.
+ */
+export async function checkRelevancyWithAI(
+  data: RelevancyPromptData
+): Promise<RelevancyCheck> {
+  const systemPrompt =
+    "You are a fast, low-cost job relevance screener. Decide whether the job matches the user using ONLY the job details and the user's own summary/instructions. Never invent facts about the user.";
+  const rawResponse = await callOpenRouter(
+    systemPrompt,
+    buildRelevancyPrompt(data),
+    readAnalysisModel() ?? undefined
+  );
+  const result = validateRelevancyOutput(rawResponse);
+  log.info(
+    `Relevance gate: relevant=${result.relevant}, score=${result.score}`,
+    { jobTitle: data.jobTitle }
+  );
+  return result;
 }
 
 /**
@@ -502,6 +667,8 @@ export async function generateProposalWithAI(
       notWants: profile.notWants,
       customInstructions: profile.customInstructions,
       userSummary: profile.userSummary,
+      portfolioSummary: profile.portfolioSummary,
+      proposalTemplates: profile.proposalTemplates,
     },
   };
 
@@ -509,7 +676,14 @@ export async function generateProposalWithAI(
   const systemPrompt =
     "You are a professional freelancer assistant writing proposals. Use ONLY the verified facts provided. Never invent skills, experience, portfolio items, certifications, previous work, or client history.";
 
-  const rawResponse = await callOpenRouter(systemPrompt, userPrompt, preferredModel);
+  const rawResponse = await callOpenRouter(
+    systemPrompt,
+    userPrompt,
+    preferredModel ?? readProposalModel() ?? undefined,
+    // Proposals are long-form and can run a big, slow model — give them more
+    // headroom than the fast relevance gate.
+    180_000
+  );
 
   // The proposal is free-form text, not JSON. Strip surrounding code fences
   // if the model wrapped it, and trim.

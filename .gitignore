@@ -13,12 +13,21 @@ build
 
 # Database files (self hosted SQLite lives here)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
-data/
+# Anchored to repo root. A bare `data/` also matches apps/web/src/lib/data/,
+# which silently excluded 7 real source files from version control.
+/data/
+
+# Tooling scratch (understand-anything output)
+.ua/
 
 # Logs
-logs
+# Anchored to repo root. A bare `logs` also matches apps/web/src/pages/logs/,
+# which silently excluded that route from version control.
+/logs
 *.log
 npm-debug.log*
 yarn-debug.log*

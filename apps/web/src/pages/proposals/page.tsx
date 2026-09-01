@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Bot, Check, PencilLine, RefreshCw, Send } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -38,11 +38,6 @@ interface ProposalsListResponse {
   proposals: ProposalRecord[];
 }
 
-interface ProposalActionResponse {
-  ok: true;
-  proposal?: ProposalRecord;
-}
-
 /**
  * Proposal pipeline. The approval queue is the heart of it: drafts generated
  * by the agent wait here until a human approves or edits them.
@@ -51,18 +46,12 @@ export default function ProposalsPage() {
   const { data, error, isLoading, refetch } = useApi<ProposalsListResponse>(
     "/api/proposals"
   );
-  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
+  const proposals = useMemo(() => data?.proposals ?? [], [data]);
   const [editing, setEditing] = useState<ProposalRecord | null>(null);
   const [draftText, setDraftText] = useState("");
   const [saving, setSaving] = useState(false);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (data?.proposals) {
-      setProposals(data.proposals);
-    }
-  }, [data]);
 
   const queue = proposals.filter((p) => p.status === "awaiting_approval");
 
@@ -83,13 +72,7 @@ export default function ProposalsPage() {
           content: draftText,
         },
       });
-      setProposals((current) =>
-        current.map((p) =>
-          p.id === editing.id
-            ? { ...p, content: draftText, updatedLabel: "just now" }
-            : p
-        )
-      );
+      refetch();
       setEditing(null);
     } catch (cause) {
       setActionError(messageFor(cause));
@@ -105,11 +88,7 @@ export default function ProposalsPage() {
         method: "PUT",
         body: { status: "queued" },
       });
-      setProposals((current) =>
-        current.map((p) =>
-          p.id === id ? { ...p, status: "queued", updatedLabel: "just now" } : p
-        )
-      );
+      refetch();
     } catch (cause) {
       setActionError(messageFor(cause));
     }
@@ -123,17 +102,10 @@ export default function ProposalsPage() {
         method: "POST",
         body: {},
       });
-      setProposals((current) =>
-        current.map((p) =>
-          p.id === proposal.id ? { ...p, updatedLabel: "just now" } : p
-        )
-      );
       if (editing?.id === proposal.id) {
         setDraftText("");
-        refetch();
-      } else {
-        refetch();
       }
+      refetch();
     } catch (cause) {
       setActionError(messageFor(cause));
     } finally {

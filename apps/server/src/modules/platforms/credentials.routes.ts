@@ -29,14 +29,28 @@ credentialsRouter.get("/", (_req, res) => {
   res.json({ credentials: listCredentials() });
 });
 
-/** Select the OpenRouter model used by all AI calls. */
+/** Select the OpenRouter models. Two roles — analysis (cheap/fast) and
+ *  proposal (strong). The legacy single `modelId` field still works and
+ *  applies to both. */
 credentialsRouter.put("/openrouter/model", (req, res, next) => {
   try {
     const input = parseBody(
-      z.object({ modelId: z.string().min(1).max(200) }),
+      z
+        .object({
+          modelId: z.string().min(1).max(200).optional(),
+          analysisModelId: z.string().min(1).max(200).optional(),
+          proposalModelId: z.string().min(1).max(200).optional(),
+        })
+        .refine(
+          (d) =>
+            d.modelId !== undefined ||
+            d.analysisModelId !== undefined ||
+            d.proposalModelId !== undefined,
+          { message: "Provide at least one model" }
+        ),
       req.body
     );
-    setModel(input.modelId);
+    setModel(input);
     res.json({ ok: true });
   } catch (error) {
     next(error);

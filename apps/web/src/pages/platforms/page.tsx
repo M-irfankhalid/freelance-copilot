@@ -140,11 +140,14 @@ export default function PlatformsPage() {
     }
   };
 
-  const changeModel = async (modelId: string) => {
+  const changeModel = async (
+    field: "analysisModelId" | "proposalModelId",
+    modelId: string
+  ) => {
     try {
       await api("/api/credentials/openrouter/model", {
         method: "PUT",
-        body: { modelId },
+        body: { [field]: modelId },
       });
       void credentials.refetch();
     } catch {
@@ -243,11 +246,28 @@ export default function PlatformsPage() {
                     ) : null}
 
                     {credential.id === "openrouter" ? (
-                      <ModelSelector
-                        current={credential.modelId}
-                        options={models.data?.models ?? []}
-                        onPick={changeModel}
-                      />
+                      <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
+                        <p className="text-xs text-muted-foreground">
+                          Two models keep screening cheap: a fast one decides
+                          relevance, a strong one writes proposals.
+                        </p>
+                        <ModelSelector
+                          label="Relevance model (fast)"
+                          current={credential.analysisModelId}
+                          options={models.data?.models ?? []}
+                          onPick={(modelId) =>
+                            void changeModel("analysisModelId", modelId)
+                          }
+                        />
+                        <ModelSelector
+                          label="Proposal model (strong)"
+                          current={credential.proposalModelId}
+                          options={models.data?.models ?? []}
+                          onPick={(modelId) =>
+                            void changeModel("proposalModelId", modelId)
+                          }
+                        />
+                      </div>
                     ) : null}
 
                     <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

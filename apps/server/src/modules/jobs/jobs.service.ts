@@ -2,10 +2,11 @@ import { getDb } from "../../db/index.js";
 import { AppError, notFound } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
 import { createLogger } from "../../lib/logger.js";
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { platformCredentials, jobs as jobsTable, bids as bidsTable } from "../../db/schema.js";
 import { getProfile } from "../profile/profile.service.js";
-import { analyzeJob as analyzeJobWithAI } from "../ai/ai.service.js";
+import { checkRelevancyWithAI } from "../ai/ai.service.js";
+import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
 import {
   type FreelancerProject,
   type FreelancerBid,
@@ -216,6 +217,79 @@ export function listStoredJobs(
   return summaries;
 }
 
+export interface MatchItem {
+  id: string;
+  jobId: string;
+  title: string;
+  client: string;
+  budgetLabel: string;
+  postedLabel: string;
+  score: number;
+  band: "strong" | "good" | "fair";
+  matchedSkills: string[];
+  missingSkills: string[];
+  concerns: string[];
+  explanation: string;
+}
+
+/**
+ * Strongest analyzed jobs, scored against the saved profile. Never calls the
+ * API or the AI — it reads the cached analysis already stored per job and
+ * recomputes matched/missing skills from the profile as the source of truth.
+ */
+export function listMatches(userId: string): MatchItem[] {
+  const profile = getProfile(userId);
+  const profileSkills = (profile?.skills ?? []).map((s) => s.trim().toLowerCase());
+
+  const rows = getDb()
+    .select()
+    .from(jobsTable)
+    .where(sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} > 0`)
+    .orderBy(desc(jobsTable.matchScore))
+    .limit(100)
+    .all();
+
+  return rows.map((row) => {
+    const score = Number(row.matchScore);
+    const stored = parseStoredAnalysis(row.analysis);
+
+    let jobSkills: string[] = [];
+    if (row.skills) {
+      try {
+        const parsed = JSON.parse(row.skills) as unknown;
+        if (Array.isArray(parsed)) {
+          jobSkills = parsed.filter((s): s is string => typeof s === "string");
+        }
+      } catch {
+        // fall through with an empty skill list
+      }
+    }
+    const jobSkillsLower = jobSkills.map((s) => s.trim().toLowerCase());
+
+    const matchedSkills = jobSkills.filter((s) =>
+      profileSkills.includes(s.trim().toLowerCase())
+    );
+    const missingSkills = (profile?.skills ?? []).filter(
+      (s) => !jobSkillsLower.includes(s.trim().toLowerCase())
+    );
+
+    return {
+      id: `match-${row.projectId}`,
+      jobId: String(row.projectId),
+      title: row.title,
+      client: row.client,
+      budgetLabel: row.budgetLabel,
+      postedLabel: row.postedLabel,
+      score,
+      band: score >= 90 ? "strong" : score >= 75 ? "good" : "fair",
+      matchedSkills,
+      missingSkills,
+      concerns: stored?.concerns ?? [],
+      explanation: stored?.summary ?? "",
+    };
+  });
+}
+
 export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSummary[]> {
   const token = requireFreelancerToken();
   const client = new FreelancerApiClient(token);
@@ -239,7 +313,15 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
   for (const project of projects) {
     const postedLabel = postedLabelFor(project);
     const summary = client.mapToJobSummary(project, postedLabel);
-    const rawData = JSON.stringify(project);
+    // Jobs from ignored countries are excluded entirely — stored as a minimal
+    // marker row (status "ignored", no rawData) and never surfaced as analysis
+    // candidates. The API can report the country under either `location` or
+    // `owner_info`, so check both (each call is a no-op when the country is
+    // missing).
+    const ignored =
+      isCountryIgnored(project?.location?.country, filters.ignoredCountries ?? []) ||
+      isCountryIgnored(project?.owner_info?.country, filters.ignoredCountries ?? []);
+    const storedStatus: JobSummary["status"] = ignored ? "ignored" : "new";
 
     const existing = getDb()
       .select()
@@ -248,48 +330,93 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
       .get();
 
     if (existing === undefined) {
-      getDb()
-        .insert(jobsTable)
-        .values({
-          id: summary.id,
-          projectId: project.id,
-          title: summary.title,
-          client: summary.client,
-          clientCountry: summary.clientCountry,
-          budgetLabel: summary.budgetLabel,
-          skills: JSON.stringify(summary.skills),
-          postedLabel: summary.postedLabel,
-          bidCount: summary.bidCount,
-          avgBidLabel: summary.avgBidLabel,
-          status: "new",
-          rawData,
-          importedAt: now,
-          updatedAt: now,
-        })
-        .run();
-      log.info(`Stored new job ${summary.id}: ${summary.title}`);
-      summaries.push(summary);
+      if (ignored) {
+        // Minimal marker: keep only what identifies the job. NOT NULL columns
+        // are padded with empties; the heavy rawData is never stored so we
+        // don't waste resources on jobs we'll never process.
+        getDb()
+          .insert(jobsTable)
+          .values({
+            id: summary.id,
+            projectId: project.id,
+            title: summary.title,
+            client: summary.client,
+            clientCountry: summary.clientCountry,
+            budgetLabel: "",
+            postedLabel: "",
+            bidCount: 0,
+            avgBidLabel: "",
+            status: "ignored",
+            ignoredAt: now,
+            importedAt: now,
+            updatedAt: now,
+          })
+          .run();
+      } else {
+        getDb()
+          .insert(jobsTable)
+          .values({
+            id: summary.id,
+            projectId: project.id,
+            title: summary.title,
+            client: summary.client,
+            clientCountry: summary.clientCountry,
+            budgetLabel: summary.budgetLabel,
+            skills: JSON.stringify(summary.skills),
+            postedLabel: summary.postedLabel,
+            bidCount: summary.bidCount,
+            avgBidLabel: summary.avgBidLabel,
+            status: storedStatus,
+            rawData: JSON.stringify(project),
+            importedAt: now,
+            updatedAt: now,
+          })
+          .run();
+      }
+      log.info(
+        ignored
+          ? `Stored job ${summary.id} from ${summary.clientCountry} as ignored (on ignore list)`
+          : `Stored new job ${summary.id}: ${summary.title}`
+      );
+      summaries.push({ ...summary, status: storedStatus });
     } else {
-      // Refresh the live fields, but keep the user's analysis state.
-      getDb()
-        .update(jobsTable)
-        .set({
-          title: summary.title,
-          client: summary.client,
-          clientCountry: summary.clientCountry,
-          budgetLabel: summary.budgetLabel,
-          skills: JSON.stringify(summary.skills),
-          postedLabel: summary.postedLabel,
-          bidCount: summary.bidCount,
-          avgBidLabel: summary.avgBidLabel,
-          rawData,
-          updatedAt: now,
-        })
-        .where(eq(jobsTable.projectId, project.id))
-        .run();
+      if (ignored) {
+        // Re-mark ignored and drop any stored rawData so the job is never
+        // reprocessed. Previously-new rows are pulled out of the queue.
+        getDb()
+          .update(jobsTable)
+          .set({
+            clientCountry: summary.clientCountry,
+            status: "ignored",
+            rawData: null,
+            ignoredAt: now,
+            updatedAt: now,
+          })
+          .where(eq(jobsTable.projectId, project.id))
+          .run();
+      } else {
+        // Refresh the live fields, but keep the user's analysis state.
+        getDb()
+          .update(jobsTable)
+          .set({
+            title: summary.title,
+            client: summary.client,
+            clientCountry: summary.clientCountry,
+            budgetLabel: summary.budgetLabel,
+            skills: JSON.stringify(summary.skills),
+            postedLabel: summary.postedLabel,
+            bidCount: summary.bidCount,
+            avgBidLabel: summary.avgBidLabel,
+            status: existing.status,
+            rawData: JSON.stringify(project),
+            updatedAt: now,
+          })
+          .where(eq(jobsTable.projectId, project.id))
+          .run();
+      }
       summaries.push({
         ...summary,
-        status: existing.status as JobSummary["status"],
+        status: ignored ? "ignored" : (existing.status as JobSummary["status"]),
         matchScore: existing.matchScore ?? undefined,
         severity: (existing.severity as JobSummary["severity"] | null) ?? undefined,
       });
@@ -333,10 +460,10 @@ export async function getJobById(projectId: number): Promise<JobDetailResponse> 
     .update(jobsTable)
     .set({
       title: project.title ?? existing.title,
-      client: project.location?.country?.name
-        ? `Client in ${project.location.country.name}`
+      client: project.owner_info?.country?.name
+        ? `Client in ${project.owner_info.country.name}`
         : existing.client,
-      clientCountry: project.location?.country?.name ?? existing.clientCountry,
+      clientCountry: project.owner_info?.country?.name ?? existing.clientCountry,
       budgetLabel: formatBudget(project.budget, project.currency?.code),
       skills: JSON.stringify(
         project.jobs?.map((j) => j.name).filter((n): n is string => Boolean(n)) ?? []
@@ -477,61 +604,113 @@ export async function analyzeJob(
     );
   }
 
+  // Defense in depth: even if a job slipped through the ingest filter, never
+  // spend AI tokens on a country the user asked to exclude entirely.
+  const country = project.location?.country;
+  if (isCountryIgnored(country, profile.ignoredCountries)) {
+    const countryLabel = country?.name ?? country?.code ?? "unknown";
+    const now = new Date().toISOString();
+    getDb()
+      .update(jobsTable)
+      .set({ status: "ignored", ignoredAt: now, updatedAt: now })
+      .where(eq(jobsTable.projectId, projectId))
+      .run();
+    log.info(`Ignored job ${projectId} from ${countryLabel} (on ignore list)`);
+    return {
+      jobId: `job-${projectId}`,
+      projectId,
+      relevancyScore: 0,
+      matchedSkills: [],
+      missingSkills: profile.skills,
+      concerns: [`Ignored country: ${countryLabel}`],
+      analysis: "This job is from a country on your ignore list and was not analyzed.",
+      recommendedBid: "—",
+    };
+  }
+
   const jobSkills = project.jobs?.map((j) => j.name).filter((n): n is string => Boolean(n)) ?? [];
   const jobDescription = splitParagraphs(project.description ?? project.preview_description ?? "");
   const bidAvg = project.bid_stats?.bid_avg ?? null;
+  const now = new Date().toISOString();
 
-  // Fetch competition data for the AI analysis.
-  let competition: CompetitionSummary | null = null;
-  try {
-    const bids = await client.getBidsForProject(projectId);
-    competition = client.mapToCompetitionSummary(bids);
-  } catch (error) {
-    if (error instanceof AppError) {
-      log.warn(`Could not fetch bids for analysis of job ${projectId}: ${error.message}`);
-    } else {
-      log.warn(`Could not fetch bids for analysis of job ${projectId}: ${error instanceof Error ? error.message : "Unknown error"}`);
-    }
-  }
+  // Save helper: mark the job ignored and return its analysis shape. Used by
+  // both reject gates (keyword filter and the relevance model) so we never
+  // spend proposal/bid work on a job the user doesn't want.
+  const storeIgnored = (
+    score: number,
+    concerns: string[],
+    summary: string
+  ): JobAnalysis => {
+    getDb()
+      .update(jobsTable)
+      .set({ status: "ignored", matchScore: score, ignoredAt: now, updatedAt: now })
+      .where(eq(jobsTable.projectId, projectId))
+      .run();
+    return {
+      jobId: `job-${projectId}`,
+      projectId,
+      relevancyScore: score,
+      matchedSkills: [],
+      missingSkills: profile.skills,
+      concerns,
+      analysis: summary,
+      recommendedBid: "—",
+    };
+  };
 
-  const result = await analyzeJobWithAI({
-    jobTitle: project.title ?? "(untitled project)",
+  // Step 1: deterministic keyword filter (free) — rejects obvious mismatches
+  // before spending even the cheap relevance model call.
+  const decision = applyRelevancyFilter({
+    jobTitle: project.title ?? "",
     jobDescription,
-    skills: jobSkills,
-    profileSkills: profile.skills,
+    jobSkills,
     wants: profile.wants,
     notWants: profile.notWants,
-    hourlyRate: profile.hourlyRate,
-    budgetLabel: formatBudget(project.budget, project.currency?.code),
-    clientName: project.location?.country?.name ? `Client in ${project.location.country.name}` : "Client",
-    bidCount: project.bid_stats?.bid_count ?? 0,
-    avgBid:
-      bidAvg !== null ? `$${Math.round(bidAvg).toLocaleString("en-US")}` : "—",
-    projectType: project.type,
-    bidPeriod: project.bidperiod,
-    upgrades: project.upgrades
-      ? {
-          featured: project.upgrades.featured ?? false,
-          urgent: project.upgrades.urgent ?? false,
-          sealed: project.upgrades.sealed ?? false,
-        }
-      : undefined,
-    competition,
+    profileSkills: profile.skills,
   });
+  if (!decision.relevant) {
+    log.info(
+      `Job ${projectId} filtered out before AI: ${decision.reasons.join("; ")}`
+    );
+    return storeIgnored(
+      0,
+      decision.reasons,
+      "This job was filtered out by your profile filters before any AI analysis was run. Update your wants, not-wants, or skills to re-evaluate it."
+    );
+  }
+
+  // Step 2: fast relevance model (Model A) — its score becomes matchScore and
+  // gates the auto-bid (and, while auto-bid is on, the auto-proposal) step.
+  const check = await checkRelevancyWithAI({
+    jobTitle: project.title ?? "(untitled project)",
+    jobDescription,
+    userSummary: profile.userSummary,
+    relevancyInstructions: profile.relevancyInstructions,
+  });
+
+  if (!check.relevant) {
+    log.info(
+      `Job ${projectId} marked ignored by relevance gate: ${check.reasons.join("; ")}`
+    );
+    return storeIgnored(
+      check.score,
+      check.reasons,
+      check.summary || "Marked irrelevant by the relevance model."
+    );
+  }
 
   const matchedSkills = jobSkills.filter((s) => profile.skills.includes(s));
   const missingSkills = profile.skills.filter((s) => !jobSkills.includes(s));
   const storedAnalysis: StoredAnalysis = {
-    verdict: result.verdict,
-    score: result.score,
-    summary: result.summary,
-    reasons: result.reasons,
-    concerns: result.concerns,
-    recommendedBidLabel: result.recommendedBidLabel,
-    competitorNote: result.competitorNote,
+    verdict: check.score >= 80 ? "strong" : check.score >= 60 ? "good" : "fair",
+    score: check.score,
+    summary: check.summary,
+    reasons: check.reasons,
+    concerns: [],
+    recommendedBidLabel: "—",
+    competitorNote: "",
   };
 
-  const now = new Date().toISOString();
   const existing = getDb()
     .select({ id: jobsTable.id })
     .from(jobsTable)
@@ -554,7 +733,7 @@ export async function analyzeJob(
         bidCount: project.bid_stats?.bid_count ?? 0,
         avgBidLabel: bidAvg !== null ? `$${Math.round(bidAvg).toLocaleString("en-US")}` : "—",
         status: "analyzed",
-        matchScore: result.score,
+        matchScore: check.score,
         analysis: JSON.stringify(storedAnalysis),
         lastAnalyzedAt: now,
         importedAt: now,
@@ -566,7 +745,7 @@ export async function analyzeJob(
       .update(jobsTable)
       .set({
         status: "analyzed",
-        matchScore: result.score,
+        matchScore: check.score,
         analysis: JSON.stringify(storedAnalysis),
         lastAnalyzedAt: now,
         updatedAt: now,
@@ -575,16 +754,16 @@ export async function analyzeJob(
       .run();
   }
 
-  log.info(`Analyzed job ${projectId}: ${result.verdict} (${result.score}%)`);
+  log.info(`Analyzed job ${projectId}: ${storedAnalysis.verdict} (${check.score}%)`);
   return {
     jobId: `job-${projectId}`,
     projectId,
-    relevancyScore: result.score,
+    relevancyScore: check.score,
     matchedSkills,
     missingSkills,
-    concerns: result.concerns,
-    analysis: result.summary,
-    recommendedBid: result.recommendedBidLabel,
+    concerns: storedAnalysis.concerns,
+    analysis: check.summary,
+    recommendedBid: "—",
   };
 }
 

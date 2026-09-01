@@ -185,13 +185,10 @@ beforeAll(async () => {
               {
                 message: {
                   content: JSON.stringify({
-                    verdict: "good",
+                    relevant: true,
                     score: 78,
-                    summary: "Matches your React/Node.js skills and your want to build dashboards.",
                     reasons: ["React.js is one of your strong skills", "Budget fits your hourly rate"],
-                    concerns: ["Bid count is moderate — expect competition"],
-                    recommendedBidLabel: "$350 – $450",
-                    competitorNote: "4 bids so far (avg $250).",
+                    summary: "Matches your React/Node.js skills and your want to build dashboards.",
                   }),
                 },
               },
@@ -245,6 +242,7 @@ beforeAll(async () => {
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
+      ignoredCountries: [],
       customInstructions: null,
     }),
   });
@@ -380,7 +378,7 @@ describe("jobs", () => {
       analysis: { relevancyScore: number; recommendedBid: string; matchedSkills: string[] };
     };
     expect(body.analysis.relevancyScore).toBe(78);
-    expect(body.analysis.recommendedBid).toBe("$350 – $450");
+    expect(body.analysis.recommendedBid).toBe("—");
     expect(body.analysis.matchedSkills).toEqual(["React.js", "Node.js"]);
 
     // Re-fetching the detail must now surface the stored analysis.
@@ -418,5 +416,66 @@ describe("jobs", () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { job: { projectId: number } };
     expect(body.job.projectId).toBe(100001);
+  });
+
+  it("marks jobs from ignored countries as ignored during search", async () => {
+    // The ignore list comes from the saved profile. Job 100001 is from
+    // Germany (both location.country and owner_info.country); job 100002
+    // is from the United States. Regression: the ingest-time check used to
+    // pass `owner_info.country.name` (a bare string) into isCountryIgnored,
+    // which expects a { name, code } object — so it always returned false.
+    const profileSave = await realFetch(`${baseUrl}/api/profile`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        freelancerUsername: "irfan_dev",
+        name: "Irfan Developer",
+        title: "Full-stack developer",
+        hourlyRate: "$35/hr",
+        about: "I build React + Node dashboards.",
+        skills: ["React.js", "Node.js"],
+        skillIds: [759, 500],
+        experience: [],
+        portfolio: [],
+        certifications: [],
+        preferredProjectTypes: ["Fixed price"],
+        wants: ["React"],
+        notWants: ["crypto"],
+        ignoredCountries: ["Germany"],
+        customInstructions: null,
+      }),
+    });
+    expect(profileSave.status).toBe(200);
+
+    const search = await realFetch(`${baseUrl}/api/jobs/search`, {
+      headers: authed(),
+    });
+    expect(search.status).toBe(200);
+    const body = (await search.json()) as {
+      jobs: Array<{ projectId: number; status: string }>;
+    };
+    const germany = body.jobs.find((j) => j.projectId === 100001);
+    const us = body.jobs.find((j) => j.projectId === 100002);
+    expect(germany?.status).toBe("ignored");
+    expect(us?.status).toBe("new");
+
+    // The ignored job must be stored as a minimal marker — no rawData — while
+    // the non-ignored job keeps its full payload.
+    const { eq } = await import("drizzle-orm");
+    const { getDb } = await import("../src/db/index.js");
+    const { jobs } = await import("../src/db/schema.js");
+    const germanyRow = getDb()
+      .select()
+      .from(jobs)
+      .where(eq(jobs.projectId, 100001))
+      .get();
+    expect(germanyRow?.status).toBe("ignored");
+    expect(germanyRow?.rawData).toBeNull();
+    const usRow = getDb()
+      .select()
+      .from(jobs)
+      .where(eq(jobs.projectId, 100002))
+      .get();
+    expect(usRow?.rawData).toBeTruthy();
   });
 });

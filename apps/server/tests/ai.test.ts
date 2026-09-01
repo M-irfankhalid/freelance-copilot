@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Express } from "express";
+import { eq } from "drizzle-orm";
 
 /**
  * AI service: pure relevancy filter and analyzeJob integration.
@@ -12,7 +13,7 @@ process.env.DATABASE_PATH = ":memory:";
 process.env.LOG_LEVEL = "error";
 process.env.ENCRYPTION_KEY ??= "test-master-key-at-least-32-chars-long!!";
 
-const { applyRelevancyFilter } = await import("../src/modules/ai/relevancy.js");
+const { applyRelevancyFilter, isCountryIgnored } = await import("../src/modules/ai/relevancy.js");
 const { createApp } = await import("../src/app.js");
 const { closeDb } = await import("../src/db/index.js");
 
@@ -195,6 +196,7 @@ beforeAll(async () => {
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
+      ignoredCountries: [],
       customInstructions: null,
     }),
   });
@@ -290,6 +292,44 @@ describe("relevancy filter (pure)", () => {
   });
 });
 
+describe("isCountryIgnored (pure)", () => {
+  it("matches the country name", () => {
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, ["Germany"])).toBe(true);
+  });
+
+  it("matches the ISO code", () => {
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, ["DE"])).toBe(true);
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, ["de"])).toBe(true);
+  });
+
+  it("is case-insensitive and trims whitespace", () => {
+    expect(isCountryIgnored({ name: "  GERMANY  ", code: "de" }, ["germany"])).toBe(true);
+  });
+
+  it("matches via partial containment", () => {
+    expect(
+      isCountryIgnored({ name: "Pakistan, Islamic Republic of", code: "pk" }, ["Pakistan"])
+    ).toBe(true);
+    expect(
+      isCountryIgnored({ name: "Pakistan", code: "pk" }, ["Pakistan, Islamic Republic of"])
+    ).toBe(true);
+  });
+
+  it("returns false for an empty ignore list", () => {
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, [])).toBe(false);
+  });
+
+  it("returns false when the country is missing", () => {
+    expect(isCountryIgnored(undefined, ["Germany"])).toBe(false);
+    expect(isCountryIgnored({}, ["Germany"])).toBe(false);
+  });
+
+  it("does not match unrelated countries", () => {
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, ["India"])).toBe(false);
+    expect(isCountryIgnored({ name: "Germany", code: "de" }, ["France", "Canada"])).toBe(false);
+  });
+});
+
 describe("analyzeJob integration", () => {
   it("returns score 0 and skips OpenRouter when not-wants matches the job", async () => {
     // The active list above has a React dashboard job. We need a job
@@ -379,13 +419,10 @@ describe("analyzeJob integration", () => {
                 {
                   message: {
                     content: JSON.stringify({
-                      verdict: "good",
+                      relevant: true,
                       score: 72,
+                      reasons: ["React.js is one of your strong skills", "Charts match your dashboard experience"],
                       summary: "Matches your React skills.",
-                      reasons: ["React.js is one of your strong skills"],
-                      concerns: ["Watch the bid count"],
-                      recommendedBidLabel: "$300 – $400",
-                      competitorNote: "3 bids so far.",
                     }),
                   },
                 },
@@ -407,6 +444,114 @@ describe("analyzeJob integration", () => {
       analysis: { relevancyScore: number; recommendedBid: string };
     };
     expect(body.analysis.relevancyScore).toBe(72);
-    expect(body.analysis.recommendedBid).toBe("$300 – $400");
+    expect(body.analysis.recommendedBid).toBe("—");
+  });
+
+  it("marks a country-ignored job as ignored and never calls OpenRouter", async () => {
+    // Put Germany on the ignore list — the job below is from Germany.
+    const putRes = await realFetch(`${baseUrl}/api/profile`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        freelancerUsername: "owner",
+        name: "Owner",
+        title: "Full-stack developer",
+        hourlyRate: "$35/hr",
+        about: "React + Node dashboards.",
+        skills: ["React.js", "Node.js"],
+        skillIds: [759, 500],
+        experience: [],
+        portfolio: [],
+        certifications: [],
+        preferredProjectTypes: ["Fixed price"],
+        wants: ["React"],
+        notWants: ["crypto"],
+        ignoredCountries: ["Germany"],
+        customInstructions: null,
+      }),
+    });
+    expect(putRes.status).toBe(200);
+
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input);
+          if (url.startsWith(baseUrl)) return realFetch(input, init);
+          if (url.includes("freelancer.com/api/projects/0.1/projects/200001")) {
+            return new Response(
+              JSON.stringify({
+                status: "success",
+                result: {
+                  id: 200001,
+                  title: "React dashboard with charts",
+                  description: "We need a React dashboard with charts.",
+                  preview_description: "React dashboard with charts.",
+                  currency: { code: "USD" },
+                  budget: { minimum: 100, maximum: 500 },
+                  bid_stats: { bid_count: 3, bid_avg: 300, min_amount: 100, max_amount: 400 },
+                  time_submitted: Math.floor(Date.now() / 1000) - 60,
+                  jobs: [{ id: 759, name: "React.js" }],
+                  location: { country: { name: "Germany", code: "de" } },
+                },
+              }),
+              { status: 200 }
+            );
+          }
+          // The AI must never be called for an ignored country.
+          if (url.includes("openrouter.ai")) {
+            throw new Error("OpenRouter was called despite the ignored country filter");
+          }
+          return new Response("not found", { status: 404 });
+        })
+      );
+
+      const r = await realFetch(`${baseUrl}/api/jobs/200001/analyze`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as {
+        analysis: { relevancyScore: number; concerns: string[]; analysis: string };
+      };
+      expect(body.analysis.relevancyScore).toBe(0);
+      expect(body.analysis.concerns).toContain("Ignored country: Germany");
+      expect(body.analysis.analysis).toMatch(/ignore list/i);
+
+      // The job must be stored with status "ignored".
+      const { getDb } = await import("../src/db/index.js");
+      const { jobs } = await import("../src/db/schema.js");
+      const row = getDb()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, 200001))
+        .get();
+      expect(row?.status).toBe("ignored");
+      expect(row?.ignoredAt).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      // Restore the empty ignore list so later tests see the original profile.
+      await realFetch(`${baseUrl}/api/profile`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          freelancerUsername: "owner",
+          name: "Owner",
+          title: "Full-stack developer",
+          hourlyRate: "$35/hr",
+          about: "React + Node dashboards.",
+          skills: ["React.js", "Node.js"],
+          skillIds: [759, 500],
+          experience: [],
+          portfolio: [],
+          certifications: [],
+          preferredProjectTypes: ["Fixed price"],
+          wants: ["React"],
+          notWants: ["crypto"],
+          ignoredCountries: [],
+          customInstructions: null,
+        }),
+      });
+    }
   });
 });

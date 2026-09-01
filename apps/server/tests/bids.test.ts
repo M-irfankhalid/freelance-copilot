@@ -142,6 +142,7 @@ beforeAll(async () => {
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
+      ignoredCountries: [],
       customInstructions: null,
     }),
   });
@@ -236,7 +237,7 @@ describe("bids", () => {
           proposalId: proposal.id,
           amount: 1500,
           period: 7,
-          milestonePercentage: 0,
+          milestonePercentage: 50,
         }),
       });
       expect(bidRes.status).toBe(201);
@@ -287,6 +288,7 @@ describe("bids", () => {
           proposalId: proposal.id,
           amount: 1200,
           period: 14,
+          milestonePercentage: 50,
         }),
       });
       expect(bidRes.status).toBe(201);
@@ -325,11 +327,66 @@ describe("bids", () => {
           proposalId: proposal.id,
           amount: 800,
           period: 7,
+          milestonePercentage: 50,
         }),
       });
       expect(bidRes.status).toBe(400);
       const errBody = (await bidRes.json()) as { error: { code: string } };
       expect(errBody.error.code).toBe("BID_ERROR");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a bid without a valid milestone percentage", async () => {
+    stubFetch();
+    try {
+      // Create and approve a proposal first.
+      const genRes = await realFetch(`${baseUrl}/api/proposals`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-milestone`,
+          projectId: PROJECT_ID,
+          jobTitle: "Milestone validation test",
+          client: "Client M",
+          content: "I can build this milestone test project.",
+          bidAmount: 900,
+        }),
+      });
+      const { proposal } = (await genRes.json()) as { proposal: { id: string } };
+      await realFetch(`${baseUrl}/api/proposals/${proposal.id}/status`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "approved" }),
+      });
+
+      // Milestone omitted → 400 VALIDATION_ERROR (must be 20–100).
+      const missingRes = await realFetch(`${baseUrl}/api/bids`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          amount: 900,
+          period: 7,
+        }),
+      });
+      expect(missingRes.status).toBe(400);
+      const missingBody = (await missingRes.json()) as { error: { code: string } };
+      expect(missingBody.error.code).toBe("VALIDATION_ERROR");
+
+      // Milestone below the 20 minimum → 400.
+      const lowRes = await realFetch(`${baseUrl}/api/bids`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          amount: 900,
+          period: 7,
+          milestonePercentage: 10,
+        }),
+      });
+      expect(lowRes.status).toBe(400);
     } finally {
       vi.unstubAllGlobals();
     }

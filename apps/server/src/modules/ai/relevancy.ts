@@ -36,8 +36,41 @@ export type RelevancyDecision =
   | { relevant: true; matchedWants: string[]; matchedKeywords: string[] }
   | { relevant: false; reasons: string[] };
 
+/** A country reference from the Freelancer API — name and/or ISO code. */
+export interface CountryRef {
+  name?: string;
+  code?: string;
+}
+
 function norm(value: string): string {
   return value.trim().toLowerCase();
+}
+
+/**
+ * Whether a job's country is on the profile's ignore list. Matches the
+ * country's name or ISO code, case-insensitively, including partial
+ * containment ("Pakistan" in "Pakistan, Islamic Republic of"). An empty
+ * ignore list or a missing country always returns false.
+ */
+export function isCountryIgnored(
+  country: CountryRef | undefined,
+  ignoredCountries: string[]
+): boolean {
+  if (country === undefined || ignoredCountries.length === 0) return false;
+
+  const haystack = [country.name, country.code]
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map(norm);
+  if (haystack.length === 0) return false;
+
+  const needles = ignoredCountries.map(norm).filter((c) => c.length > 0);
+  if (needles.length === 0) return false;
+
+  return needles.some((needle) =>
+    haystack.some(
+      (value) => value === needle || value.includes(needle) || needle.includes(value)
+    )
+  );
 }
 
 /**

@@ -76,9 +76,17 @@ export const userProfile = sqliteTable("user_profile", {
   preferredProjectTypes: text("preferred_project_types"),
   wants: text("wants"),
   notWants: text("not_wants"),
+  /** Country names/codes whose jobs are excluded before analysis. JSON array. */
+  ignoredCountries: text("ignored_countries"),
   customInstructions: text("custom_instructions"),
   importedFromFreelancer: text("imported_from_freelancer").notNull().default("0"),
   userSummary: text("user_summary"),
+  /** Free-text guidance for the relevance model (Model A), e.g. "no web3". */
+  relevancyInstructions: text("relevancy_instructions"),
+  /** Markdown summary of the user's portfolio projects, used in proposals. */
+  portfolioSummary: text("portfolio_summary"),
+  /** Markdown block holding all the user's proposal templates, used in proposals. */
+  proposalTemplates: text("proposal_templates"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -188,6 +196,9 @@ export const automationSettings = sqliteTable("automation_settings", {
   autoMatch: integer("auto_match").notNull().default(0),
   autoDraft: integer("auto_draft").notNull().default(0),
   autobidEnabled: integer("autobid_enabled").notNull().default(0),
+  /** Minimum relevance score to auto-draft a proposal (Model A score). */
+  proposalThreshold: integer("proposal_threshold").notNull().default(70),
+  /** Minimum relevance score to auto-bid. */
   minMatchScore: integer("min_match_score").notNull().default(80),
   minBid: integer("min_bid").notNull().default(0),
   maxBid: integer("max_bid").notNull().default(0),

@@ -61,7 +61,14 @@ function ensureSchema(db: Database.Database): void {
     .all() as Array<{ name: string }>;
   if (profileCols.length > 0) {
     const profileColNames = new Set(profileCols.map((c) => c.name));
-    for (const col of ["user_summary", "skill_ids"] as const) {
+    for (const col of [
+      "user_summary",
+      "skill_ids",
+      "ignored_countries",
+      "relevancy_instructions",
+      "portfolio_summary",
+      "proposal_templates",
+    ] as const) {
       if (!profileColNames.has(col)) {
         db.exec(`ALTER TABLE user_profile ADD COLUMN ${col} TEXT`);
       }
@@ -87,6 +94,9 @@ function ensureSchema(db: Database.Database): void {
     const autoColNames = new Set(autoCols.map((c) => c.name));
     if (!autoColNames.has("consecutive_errors")) {
       db.exec("ALTER TABLE automation_settings ADD COLUMN consecutive_errors INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("proposal_threshold")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN proposal_threshold INTEGER NOT NULL DEFAULT 70");
     }
   }
 
@@ -140,9 +150,13 @@ function ensureSchema(db: Database.Database): void {
       preferred_project_types TEXT,
       wants TEXT,
       not_wants TEXT,
+      ignored_countries TEXT,
       custom_instructions TEXT,
       imported_from_freelancer TEXT NOT NULL DEFAULT '0',
       user_summary TEXT,
+      relevancy_instructions TEXT,
+      portfolio_summary TEXT,
+      proposal_templates TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -238,6 +252,7 @@ function ensureSchema(db: Database.Database): void {
       auto_match INTEGER NOT NULL DEFAULT 0,
       auto_draft INTEGER NOT NULL DEFAULT 0,
       autobid_enabled INTEGER NOT NULL DEFAULT 0,
+      proposal_threshold INTEGER NOT NULL DEFAULT 70,
       min_match_score INTEGER NOT NULL DEFAULT 80,
       min_bid INTEGER NOT NULL DEFAULT 0,
       max_bid INTEGER NOT NULL DEFAULT 0,

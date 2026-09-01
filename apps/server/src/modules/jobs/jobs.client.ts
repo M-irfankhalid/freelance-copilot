@@ -220,6 +220,8 @@ export interface JobSearchFilters {
   keywords?: string[];
   /** Numeric Freelancer category ids used as `jobs[]=` filters. */
   skillIds?: number[];
+  /** Country names/codes whose jobs should be marked ignored on ingest. */
+  ignoredCountries?: string[];
   limit?: number;
   offset?: number;
 }
@@ -582,7 +584,7 @@ export class FreelancerApiClient {
     project: FreelancerProject,
     postedLabel: string
   ): JobSummary {
-    const country = project.location?.country?.name;
+    const country = project.owner_info?.country?.name;
     const skills = project.jobs?.map((j) => j.name).filter((n): n is string => Boolean(n)) ?? [];
     return {
       id: `job-${project.id}`,

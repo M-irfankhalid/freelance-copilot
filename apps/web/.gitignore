@@ -1,5 +1,7 @@
 # Logs
-logs
+# Anchored to the app root. A bare `logs` also matches src/pages/logs/,
+# which silently excluded that route from version control.
+/logs
 *.log
 npm-debug.log*
 yarn-debug.log*

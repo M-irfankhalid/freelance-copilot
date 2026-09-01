@@ -13,6 +13,7 @@ export type ErrorCode =
   | "CONFLICT"
   | "RATE_LIMITED"
   | "UPSTREAM_ERROR"
+  | "UPSTREAM_TIMEOUT"
   | "DATABASE_ERROR"
   | "PROPOSAL_ERROR"
   | "BID_ERROR"

@@ -206,6 +206,47 @@ describe("credentials", () => {
     expect(body.models.map((m) => m.id)).toEqual(["alpha/model", "zeta/model"]);
   });
 
+  it("select distinct analysis and proposal models, falling back to legacy modelId", async () => {
+    // Save a working OpenRouter key first.
+    const save = await fetch(`${baseUrl}/api/credentials/openrouter`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ value: "sk-or-test-key-1234567890" }),
+    });
+    expect(save.status).toBe(200);
+
+    // Set only the analysis model — proposal stays unset.
+    const analysis = await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ analysisModelId: "alpha/model" }),
+    });
+    expect(analysis.status).toBe(200);
+
+    // Set only the proposal model — analysis stays on alpha/model.
+    const proposal = await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ proposalModelId: "zeta/model" }),
+    });
+    expect(proposal.status).toBe(200);
+
+    const listRes = await fetch(`${baseUrl}/api/credentials`, { headers: authed() });
+    const list = (await listRes.json()) as {
+      credentials: Array<{
+        modelId: string | null;
+        analysisModelId: string | null;
+        proposalModelId: string | null;
+      }>;
+    };
+    const openrouter = list.credentials.find((c) => (c as { id?: string }).id === "openrouter");
+    expect(openrouter).toBeDefined();
+    expect(openrouter?.analysisModelId).toBe("alpha/model");
+    expect(openrouter?.proposalModelId).toBe("zeta/model");
+    // Legacy modelId mirrors the proposal model.
+    expect(openrouter?.modelId).toBe("zeta/model");
+  });
+
   it("reject unknown platforms and missing values", async () => {
     const badPlatform = await fetch(`${baseUrl}/api/credentials/nope`, {
       method: "PUT",

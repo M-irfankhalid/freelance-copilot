@@ -33,7 +33,6 @@ automationRouter.put("/", async (req, res, next) => {
         scanIntervalSeconds: z.number().int().positive().max(3600).optional(),
         autoAnalyze: z.boolean().optional(),
         autoMatch: z.boolean().optional(),
-        autoDraft: z.boolean().optional(),
         autobidEnabled: z.boolean().optional(),
         minMatchScore: z.number().int().min(0).max(100).optional(),
         minBid: z.number().int().positive().optional(),

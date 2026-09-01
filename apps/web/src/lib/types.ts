@@ -226,7 +226,12 @@ export interface CredentialSummary {
   keyPreview: string | null;
   lastTestedAt: string | null;
   lastTestMessage: string | null;
+  /** Legacy single model id (mirrors proposalModelId when set). */
   modelId: string | null;
+  /** Model used for relevance screening / analysis (cheap & fast). */
+  analysisModelId: string | null;
+  /** Model used for proposal writing (strong). */
+  proposalModelId: string | null;
   usage?: { label: string; used: number; limit: number };
 }
 
@@ -268,8 +273,8 @@ export interface AutomationSettings {
   scanIntervalSeconds: number;
   autoAnalyze: boolean;
   autoMatch: boolean;
-  autoDraft: boolean;
   autobidEnabled: boolean;
+  /** Minimum relevance score to auto-bid (also the auto-proposal gate). */
   minMatchScore: number;
   minBid: number;
   maxBid: number;
@@ -319,9 +324,17 @@ export interface UserProfile {
   preferredProjectTypes: string[];
   wants: string[];
   notWants: string[];
+  /** Country names/codes whose jobs are excluded before any analysis. */
+  ignoredCountries: string[];
   customInstructions: string;
   importedFromFreelancer: boolean;
   userSummary?: string;
+  /** Free-text guidance for the relevance model, e.g. "no web3 projects". */
+  relevancyInstructions?: string;
+  /** Markdown summary of portfolio projects, used during proposal generation. */
+  portfolioSummary?: string;
+  /** Markdown block holding all proposal templates, used during proposal generation. */
+  proposalTemplates?: string;
 }
 
 /* -------------------------------- Dashboard ------------------------------ */

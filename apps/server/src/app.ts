@@ -1,6 +1,14 @@
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import express, { type Express } from "express";
+import { setDefaultAutoSelectFamily } from "node:net";
+
+// Node's Happy Eyeballs races IPv4 against IPv6 for every outbound fetch.
+// On hosts with a broken/unroutable IPv6 path this makes the connection
+// intermittently time out — the OpenRouter and Freelancer.com credential
+// tests would flakily report "Could not reach …" even though the key works
+// and the browser/curl reach the service fine. Resolve IPv4-first instead.
+setDefaultAutoSelectFamily(false);
 
 import { env } from "./env.js";
 import { requestLogger } from "./middleware/request-logger.js";
@@ -18,6 +26,7 @@ import { bidsRouter } from "./modules/bids/bids.routes.js";
 import { automationRouter } from "./modules/automation/automation.routes.js";
 import { logsRouter } from "./modules/logs/logs.routes.js";
 import { analyticsRouter } from "./modules/analytics/analytics.routes.js";
+import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 
 /**
  * Application factory. Modular monolith: feature modules mount their own
@@ -44,6 +53,7 @@ export function createApp(): Express {
   app.use("/api/automation", requireUser, automationRouter);
   app.use("/api/logs", requireUser, logsRouter);
   app.use("/api/analytics", requireUser, analyticsRouter);
+  app.use("/api/dashboard", requireUser, dashboardRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

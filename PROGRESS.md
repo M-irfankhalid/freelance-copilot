@@ -229,6 +229,50 @@ Typecheck clean, lint clean, tests 6/6 passing at completion; live smoke test of
 - `generateProposalWithAI` loads the profile internally via `getProfile(userId)`; the `profile` field in `ProposalPromptData` is overridden and effectively ignored in the input
 - The `competitorNote` from the AI response includes the stored bid count from the stubbed OpenRouter response
 
+## Post-Phase 9 maintenance pass
+
+### Done
+
+- [x] **Automation toggle bug**: the debounced settings save in the automation page closed over a stale `settings` value, silently reverting every toggle ~750ms after switching it on. Fixed by keeping a ref pointing at the latest merged settings and building the PUT body from it.
+- [x] **Worker never resumes after hitting the daily bid cap**: `runAutoBidCheck` set `paused: true` at the cap and `checkAndResetDailyCap` never cleared it, permanently killing fetch/analyze/draft. The cap now gates bidding only — scanning/analyzing/drafting keep running, and bidding resumes next day when `bidsToday` resets.
+- [x] **Ignore countries**: new `ignored_countries` column on `user_profile` (idempotent ALTER backfill), `ignoredCountries` in the profile schema/service/import, pure `isCountryIgnored` matcher in `ai/relevancy.ts` (name or ISO code, case-insensitive, partial containment). Jobs from ignored countries are stored with status `ignored` during search ingest (never AI-analyzed) and `analyzeJob` short-circuits to a score-0 result as defense in depth. Profile page has an "Ignored countries" chip editor in Relevancy filters.
+- [x] **Mock data fully removed**: all remaining frontend mock data (`lib/data/{user,dashboard,matches,logs,proposals,bids,platforms}.ts`) deleted. Dashboard, Matches, Settings account fields, and the sidebar user menu now render real API/session data.
+- [x] **New dashboard endpoint**: `modules/dashboard/` with `GET /api/dashboard` aggregating KPIs (jobs found / strong matches / pending proposals / submitted bids with signed deltas), match-quality snapshot, jobs requiring attention, recent proposals, recent bids, bid win rate, platform connection status (from credential state + sync/ai logs), and a log-derived activity feed.
+- [x] **Matches endpoint**: `listMatches(userId)` in `jobs.service.ts` + `GET /api/jobs/matches` registered before `/:projectId`; computes matched/missing skills against the profile and returns stored concerns/summary per analyzed job.
+- [x] **Web lint fixes**: re-enabled the bid-insights card on job detail (restored `RefreshCw`/`refreshInsights`), removed the commented duplicate Analyze button, reformatted the "Show on Freelancer" link, removed a debug `console.log`, dropped an unused `ProposalActionResponse`, and replaced the proposals page's setState-in-effect with a `useMemo` derivation backed by `refetch()` after mutations.
+- [x] **Hygiene**: `.ua/`, `*.db-shm`, `*.db-wal` added to root `.gitignore`.
+
+### Verification status
+
+Verification is run after this entry: server + web typecheck, server tests, and both lints (see Verification Log).
+
+## Two-model pipeline & score-gated auto-bidding
+
+### Done
+
+- [x] **Two-model architecture**: Model A (cheap/fast) is a relevance gate — input is job title + description + user summary + relevancy instructions, output is `{ relevant, score, reasons, summary }`; the score becomes the job's match score. Model B (strong) writes proposals and only runs on relevant jobs. The legacy deep-analysis call was replaced by the relevance gate (kept as a manual endpoint).
+- [x] **One auto threshold**: `minMatchScore` gates auto-bidding, and since a proposal is only auto-written for a job the pipeline is about to bid on, it gates auto-proposals too. The separate `proposalThreshold` and the `autoDraft` toggle were removed.
+- [x] **Auto-proposals coupled to auto-bid**: auto-bid ON and score ≥ minMatchScore → the pipeline auto-writes the proposal, auto-approves it, and places the bid in the same run. Auto-bid OFF → no proposals are auto-written; the user reviews matches and generates + places bids manually.
+- [x] **Bid fields**: amount = the project's minimum budget (`project.budget.minimum`; hourly projects use their hourly minimum), clamped within the user's min/max safety bounds; period default changed 7 → 1 day; milestone 50%. Auto-bid skips jobs with no budget minimum.
+- [x] **Ignored-country jobs**: during search ingest they are stored as a minimal marker row (status `ignored`, no `rawData`) and never analyzed/drafted/bid; existing rows are re-marked ignored and their `rawData` dropped.
+- [x] **Profile additions**: `relevancyInstructions` (free-text steering for Model A), `portfolioSummary` (single markdown box), `proposalTemplates` (one long markdown containing all templates), and an editable `userSummary`. Proposal generation now sends user summary + custom instructions + portfolio summary + all templates + job detail to Model B.
+- [x] **Two-model selection**: saved in platform credentials (OpenRouter catalogue only), with backward-compatible fallback to the legacy single `modelId`.
+- [x] Test suite: 99 tests passing (new pipeline test proves a fresh job is analyzed → drafted → auto-approved → auto-bid in one run, with the amount derived from the project budget). Server + web typecheck clean.
+
+## Automation robustness fixes
+
+- [x] **Single-flight pipeline**: a manual "Run pipeline now" can no longer overlap a scheduled tick. Two overlapping runs both passed the proposal-existence check before the slow AI call, then the second insert tripped the `proposals (user_id, job_id)` UNIQUE constraint (`UNIQUE constraint failed: proposals.user_id, proposals.job_id`). `runPipeline` now guards with an in-process lock; a concurrent run returns "skipped" and logs it.
+- [x] **Clean conflict instead of 500**: `generateProposal`/`createProposal` translate a DB UNIQUE violation into a 409 CONFLICT ("proposal already exists"). The pipeline draft loop treats 409 as a skip ("proposal already exists — skipped") rather than logging an error.
+- [x] **Timeout handling**: proposal generation budget raised 120s → 180s; a timed-out OpenRouter call surfaces a clear 504 `UPSTREAM_TIMEOUT` message (adds the code to `ErrorCode`) instead of the raw "The operation was aborted due to timeout".
+- [x] Verified: server typecheck clean, 99/99 tests passing, server ESLint clean.
+
+## Auto-proposals only when auto-bid is on
+
+- [x] **Rule**: the pipeline writes a proposal solely so it can bid on that job. Auto-proposal generation is gated on `autobidEnabled` + `minMatchScore`; with auto-bid off, no proposals are auto-written (the user reviews matches and generates + places bids manually).
+- [x] Removed the now-dead `autoDraft` toggle and `proposalThreshold` field from the automation settings (interface, defaults, insert, route Zod schema, web types, and the automation page UI — the "Automatic proposals" toggle and "Proposal threshold" input are gone; the auto-bid card now says it also writes the proposal). DB columns are left in place (no migration needed).
+- [x] The pipeline draft step auto-approves unconditionally (it only runs when auto-bid is on), so Step 9 always finds a bid-ready proposal.
+- [x] Pipeline tests restructured: auto-bid off → analyze but draft 0; auto-bid on → draft + auto-approve + bid. Verified: server tsc clean, 99/99 tests, server ESLint clean, web tsc clean, web ESLint clean.
+
 ## Verification Log
 
 Record of user review sessions:
@@ -240,6 +284,9 @@ Record of user review sessions:
 | 2026-08-28 | Phase 7/8 expansion — richer job data model: raw_data column + bids table, raw API response capture, bid competition fetching/storing, project context fields (type/period/upgrades/reputation), test mock data aligned to real API shape (nested entire_history), frontend job detail page surfaces competition summary + reputation + project type + bid period. Tests 44/44, typecheck clean, lint clean. |  |
 | 2026-08-28 | Codebase hygiene pass: removed leaked OpenRouter key from launch.json, deleted debug console.logs, fixed 22 server TypeScript errors (skill shape standardized to string[], ErrorCode/LogCategory unions extended), fixed Drizzle .where() arity in proposals.service.ts, removed 3 orphaned mock data files, cleaned unused imports in ai/summary.service.ts, added lint script to server package.json, added typecheck script to web package.json, fixed root test script. Fixed title mapping in profile import (public_name, was regressed to tagline/headline), fixed mangled URL query param (sanction_details&rising_star), persisted userSummary in saveProfile. All checks pass: server tsc --noEmit clean, 44/44 tests passing, server ESLint clean, web tsc --noEmit clean, web ESLint 0 errors. |  |
 | 2026-08-28 | Phase 9 (Proposals) complete. Added `buildProposalPrompt`, `generateProposalWithAI`, `ProposalPromptData` to ai.service.ts; rewrote `generateProposal` to load profile server-side and check for duplicates (409); added `regenerateProposal` using `generateProposalWithAI` directly to update existing proposals in place; extended `proposalStatusEnum` with `queued`, PUT /:id/status Zod enum with `queued`, added POST /:id/regenerate endpoint, wired frontend proposals page to real API, updated job detail page to send full job context without profileData. Fixed accidental comment-out of `buildAnalysisPrompt` (unclosed JSDoc), lint error on `content` const, missing await on `getProposal` in regenerate. All checks pass: server tsc --noEmit clean, 52/52 tests passing, server ESLint clean, web tsc --noEmit clean. |  |
+| 2026-09-01 | Two-model pipeline + score-gated auto-bidding complete. Model A relevance gate (cheap/fast, `{relevant, score, reasons, summary}`) replaces the deep analysis call during polling; Model B writes proposals. Two thresholds (`proposalThreshold` auto-write/save, `minMatchScore` auto-bid) configurable in the automation UI. Auto-bid amount = project minimum budget (hourly min for hourly), period 1 day, milestone 50%, skip when no budget. Drafts clearing `minMatchScore` with auto-bid on are auto-approved and bid in the same run. Ignored-country jobs stored as minimal markers with no `rawData`. Profile gained `relevancyInstructions`, `portfolioSummary`, `proposalTemplates`, editable `userSummary`; Model B receives full context incl. portfolio summary + all templates. Two-model selection from OpenRouter with legacy `modelId` fallback. All checks pass: server tsc --noEmit clean, 99/99 tests passing, web tsc --noEmit clean. |  |
+| 2026-09-01 | Automation robustness: fixed `UNIQUE constraint failed: proposals.user_id, proposals.job_id` from overlapping pipeline runs (manual vs scheduled) by adding a single-flight guard to `runPipeline`; DB UNIQUE violations now map to clean 409 CONFLICT and the draft loop skips them instead of erroring. Raised proposal generation timeout 120s → 180s and surfaced timeouts as a clear 504 `UPSTREAM_TIMEOUT`. Verified: server tsc clean, 99/99 tests, server ESLint clean. |
+| 2026-09-01 | Auto-proposals coupled to auto-bid: a proposal is now auto-written only for a job the pipeline is about to bid on (auto-bid ON + score ≥ `minMatchScore`); auto-bid OFF → no auto proposals, user writes and bids manually. Removed the dead `autoDraft` toggle and `proposalThreshold` (service, routes, web types, automation page UI); draft step auto-approves unconditionally; pipeline tests restructured to assert the new rule. Verified: server tsc clean, 99/99 tests, server ESLint clean, web tsc clean, web ESLint clean. |  |
 
 ### Note
 

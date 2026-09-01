@@ -47,8 +47,16 @@ export const profileSchema = z.object({
   preferredProjectTypes: z.array(z.string().min(1).max(80)).max(20),
   wants: z.array(z.string().min(1).max(60)).max(30),
   notWants: z.array(z.string().min(1).max(60)).max(30),
+  /** Country names/codes whose jobs are excluded before any analysis. */
+  ignoredCountries: z.array(z.string().min(1).max(60)).max(50),
   customInstructions: z.string().max(5_000).nullable(),
   userSummary: z.string().max(10_000).nullable().optional(),
+  /** Free-text guidance for the relevance model, e.g. "no web3 projects". */
+  relevancyInstructions: z.string().max(5_000).nullable().optional(),
+  /** Markdown summary of portfolio projects, used during proposal generation. */
+  portfolioSummary: z.string().max(20_000).nullable().optional(),
+  /** Markdown block holding all proposal templates, used during proposal generation. */
+  proposalTemplates: z.string().max(20_000).nullable().optional(),
 });
 
 export type ProfileData = z.infer<typeof profileSchema>;
@@ -67,9 +75,13 @@ interface ProfileRow {
   preferredProjectTypes: string | null;
   wants: string | null;
   notWants: string | null;
+  ignoredCountries: string | null;
   customInstructions: string | null;
   importedFromFreelancer: string;
   userSummary: string | null;
+  relevancyInstructions: string | null;
+  portfolioSummary: string | null;
+  proposalTemplates: string | null;
 }
 
 function parseJsonArray(raw: string | null): unknown[] {
@@ -109,8 +121,12 @@ export function getProfile(userId: string): ProfileData | null {
     preferredProjectTypes: parseJsonArray(r.preferredProjectTypes),
     wants: parseJsonArray(r.wants),
     notWants: parseJsonArray(r.notWants),
+    ignoredCountries: parseJsonArray(r.ignoredCountries),
     customInstructions: r.customInstructions,
     userSummary: r.userSummary,
+    relevancyInstructions: r.relevancyInstructions,
+    portfolioSummary: r.portfolioSummary,
+    proposalTemplates: r.proposalTemplates,
   });
   return parsed.success ? parsed.data : null;
 }
@@ -132,8 +148,12 @@ export function saveProfile(userId: string, data: ProfileData): void {
     preferredProjectTypes: JSON.stringify(data.preferredProjectTypes),
     wants: JSON.stringify(data.wants),
     notWants: JSON.stringify(data.notWants),
+    ignoredCountries: JSON.stringify(data.ignoredCountries),
     customInstructions: data.customInstructions,
     userSummary: data.userSummary ?? null,
+    relevancyInstructions: data.relevancyInstructions ?? null,
+    portfolioSummary: data.portfolioSummary ?? null,
+    proposalTemplates: data.proposalTemplates ?? null,
     updatedAt: now,
   };
   const existing = getDb()
@@ -320,7 +340,12 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     preferredProjectTypes: [],
     wants: [],
     notWants: [],
+    ignoredCountries: [],
     customInstructions: null,
+    // These are written by the user or the summary generator — never the import.
+    relevancyInstructions: null,
+    portfolioSummary: null,
+    proposalTemplates: null,
   });
 
   log.info(

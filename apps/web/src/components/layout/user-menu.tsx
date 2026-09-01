@@ -16,13 +16,12 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import { currentUser } from "@/lib/data/user";
 import { useAuth } from "@/lib/auth";
 
 /**
  * Account controls shared by the sidebar footer (full row) and the site
- * header (compact avatar-only). Shows the signed-in user once auth is live;
- * falls back to the demo identity while no session exists.
+ * header (compact avatar-only). Shows the signed-in user from the session —
+ * the app lives behind ProtectedRoute, so the user is always present.
  */
 
 function initialsFor(name: string): string {
@@ -34,19 +33,15 @@ function initialsFor(name: string): string {
     .join("");
 }
 
-function displayName(authName: string | undefined): string {
-  return authName ?? currentUser.name;
-}
-
 export function UserMenu({
   variant = "sidebar",
 }: {
   variant?: "sidebar" | "header";
 }) {
   const { user } = useAuth();
-  const name = displayName(user?.name);
-  const email = user?.email ?? currentUser.email;
-  const initials = user ? initialsFor(user.name) : currentUser.initials;
+  const name = user?.name ?? "";
+  const email = user?.email ?? "";
+  const initials = user ? initialsFor(user.name) : "";
 
   if (variant === "header") {
     return (

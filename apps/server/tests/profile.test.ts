@@ -91,6 +91,7 @@ const validProfile = {
   preferredProjectTypes: ["Fixed price"],
   wants: ["React"],
   notWants: ["crypto"],
+  ignoredCountries: [],
   customInstructions: "Keep it short.",
 };
 

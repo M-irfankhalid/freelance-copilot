@@ -29,10 +29,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { currentUser } from "@/lib/data/user";
+import { useAuth } from "@/lib/auth";
 
 /** Account-level settings. Single user — no teams to manage. */
 export default function SettingsPage() {
+  const { user } = useAuth();
   const [codesOpen, setCodesOpen] = useState(false);
   const [notifyStrongMatch, setNotifyStrongMatch] = useState(true);
   const [notifyDailyDigest, setNotifyDailyDigest] = useState(true);
@@ -52,11 +53,11 @@ export default function SettingsPage() {
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="s-name">Name</Label>
-            <Input id="s-name" defaultValue={currentUser.name} />
+            <Input id="s-name" defaultValue={user?.name ?? ""} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="s-email">Email</Label>
-            <Input id="s-email" type="email" defaultValue={currentUser.email} disabled />
+            <Input id="s-email" type="email" defaultValue={user?.email ?? ""} disabled />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="s-week">Week starts on</Label>

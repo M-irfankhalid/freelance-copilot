@@ -42,40 +42,59 @@ const emptyProfile: UserProfile = {
   preferredProjectTypes: [],
   wants: [],
   notWants: [],
+  ignoredCountries: [],
   customInstructions: "",
   userSummary: "",
+  relevancyInstructions: "",
+  portfolioSummary: "",
+  proposalTemplates: "",
   importedFromFreelancer: false,
 };
 
 function toPayload(profile: UserProfile) {
+  // The profile API stores empty text fields as null, so any of these may be
+  // null when loaded back from the server — coerce before calling .trim().
+  const text = (value: string | null | undefined): string => value ?? "";
+  const name = text(profile.name).trim();
+  const title = text(profile.title).trim();
+  const hourlyRate = text(profile.hourlyRateLabel).trim();
+  const about = text(profile.about).trim();
+  const customInstructions = text(profile.customInstructions).trim();
+  const userSummary = text(profile.userSummary).trim();
+  const relevancyInstructions = text(profile.relevancyInstructions).trim();
+  const portfolioSummary = text(profile.portfolioSummary).trim();
+  const proposalTemplates = text(profile.proposalTemplates).trim();
+
   return {
     freelancerUsername: profile.freelancerUsername ?? null,
-    name: profile.name.trim().length > 0 ? profile.name.trim() : null,
-    title: profile.title.trim().length > 0 ? profile.title.trim() : null,
-    hourlyRate: profile.hourlyRateLabel.trim().length > 0 ? profile.hourlyRateLabel.trim() : null,
-    about: profile.about.trim().length > 0 ? profile.about : null,
-    skills: profile.skills,
+    name: name.length > 0 ? name : null,
+    title: title.length > 0 ? title : null,
+    hourlyRate: hourlyRate.length > 0 ? hourlyRate : null,
+    about: about.length > 0 ? about : null,
+    skills: profile.skills ?? [],
     skillIds: profile.skillIds ?? [],
-    experience: profile.experience.map((entry) => ({
+    experience: (profile.experience ?? []).map((entry) => ({
       role: entry.role,
       company: entry.company,
       periodLabel: entry.periodLabel,
-      summary: entry.summary.length > 0 ? entry.summary : null,
+      summary: text(entry.summary).length > 0 ? entry.summary : null,
     })),
-    portfolio: profile.portfolio.map((item) => ({
+    portfolio: (profile.portfolio ?? []).map((item) => ({
       title: item.title,
-      url: item.url.length > 0 ? item.url : null,
-      description: item.description.length > 0 ? item.description : null,
+      url: text(item.url).length > 0 ? item.url : null,
+      description: text(item.description).length > 0 ? item.description : null,
     })),
-    certifications: profile.certifications,
-    preferredProjectTypes: profile.preferredProjectTypes,
-    wants: profile.wants,
-    notWants: profile.notWants,
-    customInstructions:
-      profile.customInstructions.trim().length > 0
-        ? profile.customInstructions
-        : null,
-    userSummary: profile.userSummary?.trim().length > 0 ? profile.userSummary : null,
+    certifications: profile.certifications ?? [],
+    preferredProjectTypes: profile.preferredProjectTypes ?? [],
+    wants: profile.wants ?? [],
+    notWants: profile.notWants ?? [],
+    ignoredCountries: profile.ignoredCountries ?? [],
+    customInstructions: customInstructions.length > 0 ? customInstructions : null,
+    userSummary: userSummary.length > 0 ? userSummary : null,
+    relevancyInstructions:
+      relevancyInstructions.length > 0 ? relevancyInstructions : null,
+    portfolioSummary: portfolioSummary.length > 0 ? portfolioSummary : null,
+    proposalTemplates: proposalTemplates.length > 0 ? proposalTemplates : null,
   };
 }
 
@@ -83,6 +102,37 @@ function errorText(cause: unknown, fallback: string): string {
   if (cause instanceof NetworkError) return "Cannot reach the server";
   if (cause instanceof ApiError) return cause.message;
   return fallback;
+}
+
+/**
+ * The profile API stores empty text fields as null. Normalize a server-loaded
+ * profile back to strings/arrays so the form inputs are controlled and saving
+ * never trips on a null. Returns null when there is no saved profile.
+ */
+function normalizeProfile(p: UserProfile | null): UserProfile | null {
+  if (p === null) return null;
+  const text = (value: string | null | undefined): string => value ?? "";
+  return {
+    ...p,
+    name: text(p.name),
+    title: text(p.title),
+    hourlyRateLabel: text(p.hourlyRateLabel),
+    about: text(p.about),
+    customInstructions: text(p.customInstructions),
+    userSummary: text(p.userSummary),
+    relevancyInstructions: text(p.relevancyInstructions),
+    portfolioSummary: text(p.portfolioSummary),
+    proposalTemplates: text(p.proposalTemplates),
+    skills: p.skills ?? [],
+    skillIds: p.skillIds ?? [],
+    experience: p.experience ?? [],
+    portfolio: p.portfolio ?? [],
+    certifications: p.certifications ?? [],
+    preferredProjectTypes: p.preferredProjectTypes ?? [],
+    wants: p.wants ?? [],
+    notWants: p.notWants ?? [],
+    ignoredCountries: p.ignoredCountries ?? [],
+  };
 }
 
 export default function ProfilePage() {
@@ -101,7 +151,7 @@ export default function ProfilePage() {
   const [generatingSummary, setGeneratingSummary] = useState(false);
 
   const form: UserProfile =
-    override ?? stored.data?.profile ?? emptyProfile;
+    override ?? normalizeProfile(stored.data?.profile ?? null) ?? emptyProfile;
 
   const update = (patch: Partial<UserProfile>) =>
     setOverride({ ...form, ...patch });
@@ -337,6 +387,18 @@ export default function ProfilePage() {
               <Label>Not-wants — matching jobs are rejected outright</Label>
               <ChipEditor values={form.notWants} onChange={(notWants) => set("notWants", notWants)} />
             </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Ignored countries — jobs from these are never analyzed</Label>
+              <ChipEditor
+                values={form.ignoredCountries}
+                onChange={(ignoredCountries) => set("ignoredCountries", ignoredCountries)}
+                placeholder="Add a country name or ISO code"
+              />
+              <p className="text-xs text-muted-foreground">
+                Matched by name or ISO code (e.g. "Pakistan" or "PK"). Jobs from
+                ignored countries are stored but never sent to the AI.
+              </p>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -542,19 +604,25 @@ export default function ProfilePage() {
         <CardHeader>
           <CardTitle>User summary (AI-generated)</CardTitle>
           <CardDescription>
-            A concise professional summary based on your verified profile facts. Used in every AI analysis and proposal.
+            A concise professional summary based on your verified profile facts.
+            Used in every AI analysis and proposal. You can edit it directly or
+            regenerate it.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="rounded-lg border bg-background p-3 text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
-            {form.userSummary && form.userSummary.trim().length > 0 ? (
-              form.userSummary
-            ) : (
-              <span className="text-muted-foreground">No user summary yet. Click "Generate user summary" below.</span>
-            )}
-          </div>
+          <Textarea
+            aria-label="User summary"
+            rows={8}
+            value={form.userSummary || ""}
+            onChange={(event) => set("userSummary", event.target.value)}
+            placeholder="No user summary yet. Click 'Generate user summary' below or write your own."
+            className="bg-background font-mono text-[13px] leading-relaxed"
+          />
         </CardContent>
-        <CardFooter className="justify-end">
+        <CardFooter className="justify-between">
+          <p className="text-xs text-muted-foreground">
+            Generate replaces the current text — edit is kept when you Save.
+          </p>
           <Button variant="outline" size="sm" onClick={() => void runGenerateSummary()} disabled={generatingSummary}>
             <Sparkles
               className={generatingSummary ? "animate-pulse" : undefined}
@@ -564,6 +632,73 @@ export default function ProfilePage() {
           </Button>
         </CardFooter>
       </Card>
+
+      <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
+        <CardHeader>
+          <CardTitle>Relevancy instructions</CardTitle>
+          <CardDescription>
+            Standing orders for the fast relevance model that screens jobs before
+            anything else runs. Example: "no web3 or WordPress projects".
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Textarea
+            id="relevancy-instructions"
+            aria-label="Relevancy instructions"
+            rows={4}
+            value={form.relevancyInstructions || ""}
+            onChange={(event) => set("relevancyInstructions", event.target.value)}
+            className="bg-background font-mono text-[13px]"
+          />
+          <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            Sent to the relevance model alongside the job title and description.
+            Jobs flagged as irrelevant are stored but never analyzed or bid on.
+          </p>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+        <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
+          <CardHeader>
+            <CardTitle>Portfolio summary</CardTitle>
+            <CardDescription>
+              Markdown describing your portfolio projects. Used as context when
+              writing proposals.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              aria-label="Portfolio summary"
+              rows={10}
+              value={form.portfolioSummary || ""}
+              onChange={(event) => set("portfolioSummary", event.target.value)}
+              placeholder="## Projects&#10;&#10;Describe real projects only — the AI never invents them."
+              className="bg-background font-mono text-[13px] leading-relaxed"
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
+          <CardHeader>
+            <CardTitle>Proposal templates</CardTitle>
+            <CardDescription>
+              One markdown block holding all your example proposals. The writer
+              uses these to match tone and structure for each job.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              aria-label="Proposal templates"
+              rows={10}
+              value={form.proposalTemplates || ""}
+              onChange={(event) => set("proposalTemplates", event.target.value)}
+              placeholder="## Template: fixed-price job&#10;...&#10;&#10;## Template: hourly job&#10;..."
+              className="bg-background font-mono text-[13px] leading-relaxed"
+            />
+          </CardContent>
+        </Card>
+      </div>
 
       <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
         <CardHeader>

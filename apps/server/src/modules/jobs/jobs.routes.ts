@@ -13,6 +13,7 @@ import {
   getJobByUrl as getJobUrlService,
   analyzeJob as analyzeJobService,
   ignoreJob as ignoreJobService,
+  listMatches,
   listStoredJobs,
 } from "./jobs.service.js";
 
@@ -61,9 +62,9 @@ jobsRouter.get("/search", async (req, res, next) => {
     // When the caller provides no explicit skill filter, fall back to the
     // user's saved Freelancer skill IDs (captured during profile import) so
     // the search returns jobs relevant to the user's actual skill set.
+    const profile = getProfile(req.user!.id);
     let resolvedSkillIds = skillIds;
     if ((!resolvedSkillIds || resolvedSkillIds.length === 0) && !skills) {
-      const profile = getProfile(req.user!.id);
       if (profile?.skillIds && profile.skillIds.length > 0) {
         resolvedSkillIds = profile.skillIds;
       }
@@ -75,8 +76,19 @@ jobsRouter.get("/search", async (req, res, next) => {
       keywords,
       limit: Number.isFinite(limit) ? limit : undefined,
       offset: Number.isFinite(offset) ? offset : undefined,
+      ignoredCountries: profile?.ignoredCountries ?? [],
     });
     res.json({ jobs });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Analyzed jobs scored against the profile, strongest first. */
+jobsRouter.get("/matches", (req, res, next) => {
+  try {
+    const matches = listMatches(req.user!.id);
+    res.json({ matches });
   } catch (error) {
     next(error);
   }

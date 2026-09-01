@@ -53,7 +53,10 @@ bidsRouter.post("/", async (req, res, next) => {
         proposalId: z.string().min(1),
         amount: z.number().int().positive(),
         period: z.number().int().positive().max(365),
-        milestonePercentage: z.number().int().min(0).max(100).default(0),
+        // Freelancer.com requires a milestone percentage between 20 and 100;
+        // sending 0 (the old default) is rejected upstream with
+        // "Please fill in the milestone percentage (20 - 100)".
+        milestonePercentage: z.number().min(20).max(100),
       }),
       req.body
     );

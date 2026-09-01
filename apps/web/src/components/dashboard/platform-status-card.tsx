@@ -58,7 +58,16 @@ export function PlatformStatusCard({
                   <p className="truncate text-sm font-medium">{platform.name}</p>
                   <p className="truncate text-xs text-muted-foreground">
                     {platform.status === "connected"
-                      ? `@${platform.username} · Synced ${platform.lastSyncLabel} · ${platform.newJobsToday} new jobs today`
+                      ? platform.note ??
+                        [
+                          platform.username ? `@${platform.username}` : null,
+                          platform.lastSyncLabel ? `Synced ${platform.lastSyncLabel}` : null,
+                          typeof platform.newJobsToday === "number"
+                            ? `${platform.newJobsToday} new jobs today`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
                       : platform.note}
                   </p>
                 </div>

@@ -27,7 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { matches as allMatches } from "@/lib/data/matches";
+import { api } from "@/lib/api/client";
+import { useApi } from "@/lib/api/hooks";
 import type { MatchItem } from "@/lib/types";
 
 /**
@@ -35,8 +36,11 @@ import type { MatchItem } from "@/lib/types";
  * Each card explains itself: matched skills, gaps, concerns.
  */
 export default function MatchesPage() {
-  const [matches, setMatches] = useState<MatchItem[]>(allMatches);
+  const { data, isLoading, refetch } = useApi<{ matches: MatchItem[] }>(
+    "/api/jobs/matches"
+  );
   const [bandFilter, setBandFilter] = useState("all");
+  const matches = useMemo(() => data?.matches ?? [], [data]);
 
   const visible = useMemo(
     () =>
@@ -46,8 +50,14 @@ export default function MatchesPage() {
     [bandFilter, matches]
   );
 
-  const ignore = (id: string) =>
-    setMatches((current) => current.filter((match) => match.id !== id));
+  const ignore = async (jobId: string) => {
+    try {
+      await api<{ ok: true }>(`/api/jobs/${jobId}/ignore`, { method: "POST" });
+      refetch();
+    } catch {
+      // The job stays visible on failure; the toast/error surface is out of scope here.
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4 md:gap-6">
@@ -71,8 +81,7 @@ export default function MatchesPage() {
       />
 
       <div className="flex flex-col gap-4">
-        {visible.map((match) => (
-          <Card key={match.id} size="sm">
+        {visible.map((match) => (          <Card key={match.id} size="sm">
             <CardHeader>
               <CardTitle className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Link
@@ -145,7 +154,7 @@ export default function MatchesPage() {
             </CardContent>
 
             <CardFooter className="justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => ignore(match.id)}>
+              <Button variant="ghost" size="sm" onClick={() => void ignore(match.jobId)}>
                 <ThumbsDown data-icon="inline-start" />
                 Ignore
               </Button>
@@ -163,7 +172,11 @@ export default function MatchesPage() {
         ))}
       </div>
 
-      {visible.length === 0 ? (
+      {isLoading ? (
+        <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
+          Loading matches…
+        </p>
+      ) : visible.length === 0 ? (
         <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
           Nothing in this band right now. The worker keeps scanning every interval.
         </p>

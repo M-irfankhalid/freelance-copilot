@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft, Bot, CircleCheck, Clock, Eye, FileText, Globe,
@@ -51,10 +51,11 @@ export default function JobDetailPage() {
   const path = projectId !== null ? `/api/jobs/${projectId}` : null;
   const { data, error, isLoading, refetch } = useApi<JobDetailResponse>(path);
   const job = data?.job ?? null;
-  console.log(data)
 
   const [proposalText, setProposalText] = useState("");
+  const [proposalId, setProposalId] = useState<string | null>(null);
   const [bidAmount, setBidAmount] = useState("");
+  const [milestonePercentage, setMilestonePercentage] = useState("50");
   const [deliveryTime, setDeliveryTime] = useState("2 weeks");
   const [generatingProposal, setGeneratingProposal] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
@@ -66,6 +67,27 @@ export default function JobDetailPage() {
   const [refreshedLabel, setRefreshedLabel] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+
+  // Load any saved proposal for this job so the proposal box shows what the
+  // agent already wrote, and regeneration updates it in place.
+  useEffect(() => {
+    if (projectId === null) return;
+    let cancelled = false;
+    api<{ proposal: { id: string; content: string } | null }>(
+      `/api/proposals/job/job-${projectId}`
+    )
+      .then((res) => {
+        if (cancelled || res.proposal === null) return;
+        setProposalId(res.proposal.id);
+        setProposalText(res.proposal.content);
+      })
+      .catch(() => {
+        // Non-fatal: if the lookup fails the proposal box just starts empty.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   if (projectId === null) {
     return <JobNotFound />;
@@ -125,9 +147,26 @@ export default function JobDetailPage() {
     setGeneratingProposal(true);
     setProposalError(null);
     try {
-      const response = await api<{ proposal: { content: string; competitorNote?: string } }>(
-        `/api/proposals/generate`,
-        {
+      if (proposalId !== null) {
+        // A proposal already exists for this job — regenerate it in place.
+        // Calling /api/proposals/generate again would return a 409 conflict.
+        const res = await api<{ proposal: { content: string; competitorNote?: string } }>(
+          `/api/proposals/${proposalId}/regenerate`,
+          {
+            method: "POST",
+            body: {
+              projectType: job.projectType,
+              bidPeriod: job.bidPeriod,
+              upgrades: job.upgrades,
+              competition: job.competition,
+            },
+          }
+        );
+        setProposalText(res.proposal.content);
+      } else {
+        const response = await api<{
+          proposal: { id: string; content: string; competitorNote?: string };
+        }>(`/api/proposals/generate`, {
           method: "POST",
           body: {
             jobId: `job-${projectId}`,
@@ -147,9 +186,10 @@ export default function JobDetailPage() {
             upgrades: job.upgrades,
             competition: job.competition,
           },
-        }
-      );
-      setProposalText(response.proposal.content);
+        });
+        setProposalId(response.proposal.id);
+        setProposalText(response.proposal.content);
+      }
     } catch (cause) {
       setProposalError(messageFor(cause));
     } finally {
@@ -163,22 +203,39 @@ export default function JobDetailPage() {
     setBidError(null);
     try {
       const bidValue = bidAmount ? parseInt(bidAmount.replace(/[^0-9]/g, ""), 10) || 0 : 0;
+      const milestone = Number(milestonePercentage);
+      if (!Number.isFinite(milestone) || milestone < 20 || milestone > 100) {
+        setBidError("Milestone percentage must be between 20 and 100.");
+        return;
+      }
 
-      // 1. Create a draft proposal from the AI-generated text.
-      const proposalRes = await api<{ proposal: { id: string } }>(`/api/proposals`, {
-        method: "POST",
-        body: {
-          jobId: `job-${projectId}`,
-          projectId,
-          jobTitle: job.title,
-          client: job.client,
-          content: proposalText,
-          bidAmount: bidValue > 0 ? bidValue : undefined,
-        },
-      });
+      // 1. Reuse the saved proposal if one exists; otherwise create a draft
+      //    from the current text. Reusing avoids the duplicate-proposal 409.
+      let pid = proposalId;
+      if (pid === null) {
+        const proposalRes = await api<{ proposal: { id: string } }>(`/api/proposals`, {
+          method: "POST",
+          body: {
+            jobId: `job-${projectId}`,
+            projectId,
+            jobTitle: job.title,
+            client: job.client,
+            content: proposalText,
+            bidAmount: bidValue > 0 ? bidValue : undefined,
+          },
+        });
+        pid = proposalRes.proposal.id;
+        setProposalId(pid);
+      } else {
+        // Save any edits made in the box before bidding.
+        await api<{ ok: true }>(`/api/proposals/${pid}`, {
+          method: "PUT",
+          body: { content: proposalText },
+        });
+      }
 
       // 2. Approve the proposal so it can be submitted as a bid.
-      await api<{ ok: true }>(`/api/proposals/${proposalRes.proposal.id}/status`, {
+      await api<{ ok: true }>(`/api/proposals/${pid}/status`, {
         method: "PUT",
         body: { status: "approved" },
       });
@@ -187,9 +244,10 @@ export default function JobDetailPage() {
       await api<{ bid: { id: string } }>(`/api/bids`, {
         method: "POST",
         body: {
-          proposalId: proposalRes.proposal.id,
+          proposalId: pid,
           amount: bidValue,
           period: job.bidPeriod ?? 7,
+          milestonePercentage: milestone,
         },
       });
 
@@ -253,6 +311,14 @@ export default function JobDetailPage() {
                 </span>
               ) : null}
               <span>Project #{job.projectId}</span>
+              <a
+                href={`https://www.freelancer.com/projects/${job.projectId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-primary underline underline-offset-4 hover:text-primary/80"
+              >
+                Show on Freelancer
+              </a>
             </div>
           </div>
           {job.matchScore !== undefined && job.matchScore > 0 ? (
@@ -325,12 +391,14 @@ export default function JobDetailPage() {
                   Write or generate proposal
                 </CardTitle>
                 <CardDescription>
-                  Compose directly here. The AI can generate a proposal using your profile facts and this job's details.
+                  {proposalId !== null
+                    ? "Your saved proposal is shown below — edit it, or regenerate it in place."
+                    : "Compose directly here. The AI can generate a proposal using your profile facts and this job's details."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
-                {/* Bid amount and time duration */}
-                <div className="grid grid-cols-2 gap-3">
+                {/* Bid amount, milestone and time duration */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="bid-amount" className="text-xs font-medium">Bid amount ($)</Label>
                     <Input
@@ -340,6 +408,22 @@ export default function JobDetailPage() {
                       className="h-9"
                       value={bidAmount}
                       onChange={(e) => setBidAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="milestone-percentage" className="text-xs font-medium">
+                      Milestone % <span className="text-muted-foreground">(20–100)</span>
+                    </Label>
+                    <Input
+                      id="milestone-percentage"
+                      type="number"
+                      min={20}
+                      max={100}
+                      step={1}
+                      placeholder="e.g. 50"
+                      className="h-9"
+                      value={milestonePercentage}
+                      onChange={(e) => setMilestonePercentage(e.target.value)}
                     />
                   </div>
                   <div className="flex flex-col gap-1.5">
@@ -374,7 +458,11 @@ export default function JobDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" variant="outline" onClick={generateProposalWithAI} disabled={generatingProposal}>
                     <Bot data-icon="inline-start" className={generatingProposal ? "animate-spin" : "size-4"} />
-                    {generatingProposal ? "Generating…" : "Generate with AI"}
+                    {generatingProposal
+                      ? "Generating…"
+                      : proposalId !== null
+                        ? "Regenerate with AI"
+                        : "Generate with AI"}
                   </Button>
                   <Button size="sm" onClick={placeBid} disabled={placingBid}>
                     <Send data-icon="inline-start" className="size-4" />
@@ -487,7 +575,7 @@ export default function JobDetailPage() {
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  onClick={refreshInsights}
+                  onClick={() => void refreshInsights()}
                   disabled={refreshing}
                   aria-label="Refresh bid insights"
                 >
@@ -585,10 +673,6 @@ export default function JobDetailPage() {
               </CardContent>
             </Card>
 
-            <Button size="lg" onClick={runAnalyze} disabled={analyzing}>
-              <Sparkles data-icon="inline-start" className={analyzing ? "animate-pulse" : undefined} />
-              {analyzing ? "Analyzing…" : job.matchScore !== undefined && job.matchScore > 0 ? "Re-analyze" : "Analyze"}
-            </Button>
             <Button
               variant="destructive"
               disabled={ignored}

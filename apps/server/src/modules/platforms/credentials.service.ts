@@ -26,8 +26,12 @@ export function isPlatformId(value: string): value is PlatformId {
 }
 
 interface CredentialMeta {
-  /** Selected OpenRouter model id. */
+  /** Legacy single model selection — still honored as a fallback. */
   modelId?: string;
+  /** Model used for relevance screening / analysis (Model A). */
+  analysisModelId?: string;
+  /** Model used for proposal writing (Model B). */
+  proposalModelId?: string;
   /** Summary from the last successful test. */
   lastTestMessage?: string;
   usage?: { label: string; used: number; limit: number };
@@ -49,7 +53,12 @@ export interface CredentialSummary {
   keyPreview: string | null;
   lastTestedAt: string | null;
   lastTestMessage: string | null;
+  /** Legacy single model id (mirrors proposalModelId when set). */
   modelId: string | null;
+  /** Model used for relevance screening / analysis. */
+  analysisModelId: string | null;
+  /** Model used for proposal writing. */
+  proposalModelId: string | null;
   usage: CredentialMeta["usage"];
 }
 
@@ -66,6 +75,8 @@ export function listCredentials(): CredentialSummary[] {
         lastTestedAt: null,
         lastTestMessage: null,
         modelId: null,
+        analysisModelId: null,
+        proposalModelId: null,
         usage: undefined,
       };
     }
@@ -77,6 +88,7 @@ export function listCredentials(): CredentialSummary[] {
       // Undecryptable (wrong key or tampered row) — hide it rather than leak.
       preview = null;
     }
+    const modelId = meta.modelId ?? null;
     return {
       id,
       connected: true,
@@ -84,7 +96,9 @@ export function listCredentials(): CredentialSummary[] {
       keyPreview: preview,
       lastTestedAt: row.lastTestedAt,
       lastTestMessage: meta.lastTestMessage ?? null,
-      modelId: meta.modelId ?? null,
+      modelId,
+      analysisModelId: meta.analysisModelId ?? modelId,
+      proposalModelId: meta.proposalModelId ?? modelId,
       usage: meta.usage,
     };
   });
@@ -196,7 +210,11 @@ export function deleteCredential(id: PlatformId): void {
     .run();
 }
 
-export function setModel(modelId: string): void {
+export function setModel(input: {
+  modelId?: string;
+  analysisModelId?: string;
+  proposalModelId?: string;
+}): void {
   const row = getDb()
     .select()
     .from(platformCredentials)
@@ -209,7 +227,21 @@ export function setModel(modelId: string): void {
       "Save an OpenRouter key before choosing a model"
     );
   }
-  const meta = { ...parseMeta(row.meta), modelId };
+  const meta = { ...parseMeta(row.meta) };
+  if (input.modelId !== undefined) {
+    // Legacy single-model selection applies to both roles.
+    meta.modelId = input.modelId;
+    meta.analysisModelId = input.modelId;
+    meta.proposalModelId = input.modelId;
+  }
+  if (input.analysisModelId !== undefined) {
+    meta.analysisModelId = input.analysisModelId;
+  }
+  if (input.proposalModelId !== undefined) {
+    meta.proposalModelId = input.proposalModelId;
+    // Keep the legacy pointer on the "main" model for any old readers.
+    meta.modelId = input.proposalModelId;
+  }
   getDb()
     .update(platformCredentials)
     .set({ meta: JSON.stringify(meta), updatedAt: new Date().toISOString() })

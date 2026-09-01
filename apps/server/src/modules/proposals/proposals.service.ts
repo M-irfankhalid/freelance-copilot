@@ -146,14 +146,21 @@ export async function createProposal(
     };
   } catch (error) {
     if (error instanceof AppError) throw error;
-    log.error("Failed to create proposal:", {
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-    throw new AppError(
-      500,
-      "DATABASE_ERROR",
-      `Failed to create proposal: ${error instanceof Error ? error.message : "Unknown error"}`
-    );
+    const message = error instanceof Error ? error.message : "Unknown error";
+    // Same job generated twice in overlapping calls — the UNIQUE index wins.
+    if (
+      error instanceof Error &&
+      ((error as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE" ||
+        message.includes("UNIQUE constraint failed"))
+    ) {
+      throw new AppError(
+        409,
+        "CONFLICT",
+        `A proposal for this job (${data.jobTitle}) already exists. Use regenerate or edit instead.`
+      );
+    }
+    log.error("Failed to create proposal:", { error: message });
+    throw new AppError(500, "DATABASE_ERROR", `Failed to create proposal: ${message}`);
   }
 }
 
@@ -251,6 +258,45 @@ export async function getProposal(
       500,
       "DATABASE_ERROR",
       `Failed to get proposal: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
+}
+
+export async function getProposalByJob(
+  userId: string,
+  jobId: string
+): Promise<ProposalData | null> {
+  try {
+    const row = getDb()
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.userId, userId), eq(proposals.jobId, jobId)))
+      .get();
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      userId: row.userId,
+      jobId: row.jobId,
+      projectId: row.projectId,
+      jobTitle: row.jobTitle,
+      client: row.client,
+      bidAmount: row.bidAmount ?? null,
+      status: row.status as ProposalStatus,
+      content: row.content,
+      competitorNote: row.competitorNote ?? null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  } catch (error) {
+    log.error("Failed to get proposal by job:", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    throw new AppError(
+      500,
+      "DATABASE_ERROR",
+      `Failed to get proposal by job: ${error instanceof Error ? error.message : "Unknown error"}`
     );
   }
 }
@@ -416,6 +462,8 @@ export async function generateProposal(
           notWants: profile.notWants,
           customInstructions: profile.customInstructions,
           userSummary: profile.userSummary,
+          portfolioSummary: profile.portfolioSummary,
+          proposalTemplates: profile.proposalTemplates,
         },
         analysis: analysis
           ? { score: analysis.score, recommendedBidLabel: analysis.recommendedBidLabel, summary: analysis.summary }
@@ -467,14 +515,41 @@ export async function generateProposal(
     };
   } catch (error) {
     if (error instanceof AppError) throw error;
-    log.error("Failed to generate proposal:", {
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-    throw new AppError(
-      500,
-      "PROPOSAL_ERROR",
-      `Failed to generate proposal: ${error instanceof Error ? error.message : "Unknown error"}`
-    );
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    // Two overlapping generations for the same job can both pass the existence
+    // check before the slow AI call; the DB UNIQUE index is the final arbiter.
+    // Report that as a clean conflict, not a server error.
+    const isUniqueViolation =
+      error instanceof Error &&
+      ((error as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE" ||
+        message.includes("UNIQUE constraint failed"));
+
+    // The OpenRouter request was cut off by its timeout — explain instead of
+    // leaking the raw DOMException text.
+    const isTimeout =
+      error instanceof Error &&
+      (error.name === "TimeoutError" ||
+        error.name === "AbortError" ||
+        message.includes("aborted due to timeout"));
+
+    if (isUniqueViolation) {
+      throw new AppError(
+        409,
+        "CONFLICT",
+        `A proposal for this job (${jobTitle}) already exists. Use regenerate or edit instead.`
+      );
+    }
+    if (isTimeout) {
+      throw new AppError(
+        504,
+        "UPSTREAM_TIMEOUT",
+        "The AI request timed out — the model may be slow or overloaded. Try again, or pick a faster proposal model on the Platforms page."
+      );
+    }
+
+    log.error("Failed to generate proposal:", { error: message });
+    throw new AppError(500, "PROPOSAL_ERROR", `Failed to generate proposal: ${message}`);
   }
 }
 

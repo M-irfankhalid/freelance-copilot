@@ -111,7 +111,9 @@ Use ONLY the facts above. Never invent skills, experience, portfolio items, cert
       ],
       temperature: 0.3,
     }),
-    signal: AbortSignal.timeout(30000),
+    // Generous budget: LLM generation on a full job description regularly
+    // exceeds the 30s used for plain API fetches.
+    signal: AbortSignal.timeout(120_000),
   });
 
   if (response.status === 401) {

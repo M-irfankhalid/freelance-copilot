@@ -6,7 +6,7 @@ import { getOrCreateSettings, runPipeline } from "./automation.service.js";
 const log = createLogger("system");
 
 /** Minimum scan interval enforced for the scheduled worker (seconds). */
-export const MIN_SCAN_INTERVAL_SECONDS = 30;
+export const MIN_SCAN_INTERVAL_SECONDS = 10;
 
 /** Default scan interval when no user settings exist (seconds). */
 export const DEFAULT_SCAN_INTERVAL_SECONDS = 60;

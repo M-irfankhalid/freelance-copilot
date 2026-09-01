@@ -20,7 +20,6 @@ import JobDetailPage from "@/pages/jobs/[id]/page";
 import LoginPage from "@/pages/auth/login/page";
 import LogsPage from "@/pages/logs/page";
 import MatchesPage from "@/pages/matches/page";
-import OnboardingPage from "@/pages/onboarding/page";
 import PlatformsPage from "@/pages/platforms/page";
 import ProposalsPage from "@/pages/proposals/page";
 import ProfilePage from "@/pages/profile/page";
@@ -38,7 +37,7 @@ const DashboardPage = lazy(() => import("@/pages/dashboard/page"));
 const router = createBrowserRouter([
   { path: "/login", element: <LoginPage />, errorElement: <RouteErrorBoundary /> },
   { path: "/signup", element: <SignupPage />, errorElement: <RouteErrorBoundary /> },
-  { path: "/onboarding", element: <OnboardingPage />, errorElement: <RouteErrorBoundary /> },
+  // { path: "/onboarding", element: <OnboardingPage />, errorElement: <RouteErrorBoundary /> },
   {
     path: "/",
     element: (

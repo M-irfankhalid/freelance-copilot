@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Pause, Play, TriangleAlert, Zap } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -44,7 +44,6 @@ interface BackendSettings {
   scanIntervalSeconds: number;
   autoAnalyze: boolean;
   autoMatch: boolean;
-  autoDraft: boolean;
   autobidEnabled: boolean;
   minMatchScore: number;
   minBid: number;
@@ -66,7 +65,6 @@ function normalizeSettings(s: BackendSettings): AutomationSettings {
     scanIntervalSeconds: s.scanIntervalSeconds,
     autoAnalyze: s.autoAnalyze,
     autoMatch: s.autoMatch,
-    autoDraft: s.autoDraft,
     autobidEnabled: s.autobidEnabled,
     minMatchScore: s.minMatchScore,
     minBid: s.minBid,
@@ -108,6 +106,14 @@ export default function AutomationPage() {
     return { ...normalizeSettings(serverSettings), ...draft };
   }, [serverSettings, draft]);
 
+  // Keep a ref pointing at the latest merged settings so the debounced save
+  // always sends the freshest values. A closure over `settings` would capture
+  // the pre-draft value and silently revert whatever the user just toggled.
+  const settingsRef = useRef<AutomationSettings | null>(null);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
   const runs = runsData?.runs ?? [];
 
   const update = <K extends keyof AutomationSettings>(
@@ -125,21 +131,21 @@ export default function AutomationPage() {
   };
 
   const saveSettings = async () => {
-    if (!settings) return;
+    const current = settingsRef.current;
+    if (!current) return;
     setActionError(null);
     try {
       await api<{ settings: BackendSettings }>("/api/automation", {
         method: "PUT",
         body: {
-          scanIntervalSeconds: settings.scanIntervalSeconds,
-          autoAnalyze: settings.autoAnalyze,
-          autoMatch: settings.autoMatch,
-          autoDraft: settings.autoDraft,
-          autobidEnabled: settings.autobidEnabled,
-          minMatchScore: settings.minMatchScore,
-          minBid: settings.minBid,
-          maxBid: settings.maxBid,
-          dailyCap: settings.dailyCap,
+          scanIntervalSeconds: current.scanIntervalSeconds,
+          autoAnalyze: current.autoAnalyze,
+          autoMatch: current.autoMatch,
+          autobidEnabled: current.autobidEnabled,
+          minMatchScore: current.minMatchScore,
+          minBid: current.minBid,
+          maxBid: current.maxBid,
+          dailyCap: current.dailyCap,
         },
       });
       // Clear local drafts since server now reflects the new state.
@@ -284,7 +290,8 @@ export default function AutomationPage() {
           <CardHeader>
             <CardTitle>Worker pipeline</CardTitle>
             <CardDescription>
-              Each step can run unattended; bidding always stops for review first.
+              Each step can run unattended. With auto-bid on, the worker writes the
+              proposal too — off, you review matches and write your own.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col divide-y">
@@ -303,6 +310,7 @@ export default function AutomationPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="10">Every 10 seconds</SelectItem>
                   <SelectItem value="30">Every 30 seconds</SelectItem>
                   <SelectItem value="60">Every 60 seconds</SelectItem>
                   <SelectItem value="120">Every 2 minutes</SelectItem>
@@ -315,7 +323,6 @@ export default function AutomationPage() {
               [
                 ["autoAnalyze", "Automatic analysis", "Send new jobs to the AI after each scan"],
                 ["autoMatch", "Automatic matching", "Score every analyzed job against your profile"],
-                ["autoDraft", "Automatic proposals", "Draft proposals for strong matches into the approval queue"],
               ] as const
             ).map(([key, label, hint]) => (
               <div key={key} className="flex items-center justify-between gap-4 py-3">
@@ -344,8 +351,8 @@ export default function AutomationPage() {
               Auto-bid
             </CardTitle>
             <CardDescription>
-              Off by default. When on, bids that clear your score threshold are placed
-              inside these bounds without review.
+              Off by default. When on, every job that clears your match score gets a
+              proposal written and a bid placed inside these bounds — no review.
             </CardDescription>
             <CardAction>
               <Switch
@@ -421,9 +428,8 @@ export default function AutomationPage() {
             </div>
 
             <p className="text-xs leading-relaxed text-muted-foreground">
-              The AI picks each amount between ${settings.minBid.toLocaleString()} and $
-              {settings.maxBid.toLocaleString()} based on job size. Every decision lands in
-              Logs with its reasoning.
+              Bids are priced at the project&apos;s minimum budget, clamped between your
+              lower and upper bounds. Every decision lands in Logs with its reasoning.
             </p>
           </CardContent>
         </Card>

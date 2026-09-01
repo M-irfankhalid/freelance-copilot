@@ -6,6 +6,7 @@ import {
   createProposal,
   listProposals,
   getProposal,
+  getProposalByJob,
   updateProposalStatus,
   saveProposal,
   generateProposal,
@@ -28,6 +29,17 @@ proposalsRouter.get("/", async (req, res, next) => {
         : undefined
     );
     res.json({ proposals });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Get the proposal for a job (if one exists). Used by the job detail page to
+ *  prefill the proposal box and to enable in-place regeneration. */
+proposalsRouter.get("/job/:jobId", async (req, res, next) => {
+  try {
+    const proposal = await getProposalByJob(req.user!.id, req.params.jobId);
+    res.json({ proposal });
   } catch (error) {
     next(error);
   }

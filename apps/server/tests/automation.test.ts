@@ -117,6 +117,7 @@ beforeAll(async () => {
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
+      ignoredCountries: [],
       customInstructions: null,
     }),
   });
@@ -149,7 +150,12 @@ beforeAll(async () => {
         recommendedBidLabel: "$1000 – $1500",
         competitorNote: "3 bids so far.",
       }),
-      rawData: null,
+      rawData: JSON.stringify({
+        id: PROJECT_ID,
+        title: "Auto-bid candidate project",
+        budget: { minimum: 500, maximum: 2000, project_type: "fixed" },
+        type: "fixed",
+      }),
       lastAnalyzedAt: now,
       ignoredAt: null,
       importedAt: now,
@@ -257,6 +263,8 @@ describe("auto-bid engine", () => {
       const { bids } = (await listRes.json()) as { bids: Array<{ via: string; amount: number }> };
       expect(bids.length).toBe(1);
       expect(bids[0]!.via).toBe("auto");
+      // Amount comes from the project's minimum budget ($500, not below minBid).
+      expect(bids[0]!.amount).toBe(500);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -332,7 +340,12 @@ describe("auto-bid engine", () => {
             recommendedBidLabel: "$800 – $1200",
             competitorNote: "2 bids so far.",
           }),
-          rawData: null,
+          rawData: JSON.stringify({
+            id: PROJECT_ID + 1,
+            title: "Second auto-bid candidate",
+            budget: { minimum: 300, maximum: 1500, project_type: "fixed" },
+            type: "fixed",
+          }),
           lastAnalyzedAt: now,
           ignoredAt: null,
           importedAt: now,
@@ -373,14 +386,9 @@ describe("auto-bid engine", () => {
     }
   });
 
-  it("respects the daily cap and auto-pauses when reached", async () => {
+  it("stops bidding at the daily cap without pausing the worker", async () => {
     stubFetch();
     try {
-      // Set a daily cap of 1 and reset today's count.
-      // First, manually set bidsToday to 1 via the API — but the API doesn't
-      // expose that field directly. Instead, set the daily cap low and place
-      // enough jobs to hit it.
-
       // Set dailyCap to 2 (we already placed 2 bids above).
       await realFetch(`${baseUrl}/api/automation`, {
         method: "PUT",
@@ -399,10 +407,11 @@ describe("auto-bid engine", () => {
       // Should not have placed any more bids (cap of 2 was reached, already placed 2).
       expect(bidPostCallCount).toBe(before);
 
-      // Settings should now be auto-paused.
+      // The cap gates bidding ONLY — the worker must NOT be paused, so
+      // scanning/analyzing/drafting keep running.
       const settingsRes = await realFetch(`${baseUrl}/api/automation`, { headers: authed() });
       const { settings } = (await settingsRes.json()) as { settings: { paused: boolean } };
-      expect(settings.paused).toBe(true);
+      expect(settings.paused).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
