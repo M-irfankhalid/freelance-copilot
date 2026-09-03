@@ -84,6 +84,15 @@ function ensureSchema(db: Database.Database): void {
     if (!jobsColNames.has("raw_data")) {
       db.exec("ALTER TABLE jobs ADD COLUMN raw_data TEXT");
     }
+    if (!jobsColNames.has("rejection_reason")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN rejection_reason TEXT");
+    }
+    if (!jobsColNames.has("auto_bid_failed_at")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN auto_bid_failed_at TEXT");
+    }
+    if (!jobsColNames.has("auto_bid_error")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN auto_bid_error TEXT");
+    }
   }
 
   // Backfill consecutive_errors column on automation_settings (Phase 12).
@@ -189,6 +198,9 @@ function ensureSchema(db: Database.Database): void {
       raw_data TEXT,
       last_analyzed_at TEXT,
       ignored_at TEXT,
+      rejection_reason TEXT,
+      auto_bid_failed_at TEXT,
+      auto_bid_error TEXT,
       imported_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -272,6 +284,15 @@ function ensureSchema(db: Database.Database): void {
       detail TEXT NOT NULL,
       result TEXT NOT NULL,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS discord_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      webhook_cipher_text TEXT,
+      webhook_iv TEXT,
+      webhook_auth_tag TEXT,
+      events TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
     );
   `);
 }

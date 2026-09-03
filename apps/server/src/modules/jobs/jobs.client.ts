@@ -240,6 +240,14 @@ export interface JobSummary {
   matchScore?: number;
   severity?: "urgent" | "warning" | "info";
   status: "new" | "analyzed" | "ignored";
+  /** Why the job was rejected/ignored, when status is "ignored". */
+  rejectionReason?: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded?: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia?: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome?: "in_review" | "won" | "lost" | null;
 }
 
 /** Competition snapshot from stored bid data. */
@@ -265,6 +273,10 @@ export interface JobDetailData {
   matchScore?: number;
   severity?: "urgent" | "warning" | "info";
   status: "new" | "analyzed" | "ignored";
+  /** Why the job was rejected/ignored, when status is "ignored". */
+  rejectionReason?: string | null;
+  /** Error from the last failed automatic bid attempt, if any. */
+  bidError?: string | null;
   description: string[];
   clientInfo: {
     name: string;
@@ -611,7 +623,11 @@ export class FreelancerApiClient {
     storedAnalysis: StoredAnalysis | null,
     storedStatus: "new" | "analyzed" | "ignored",
     storedMatchScore: number | null,
-    competition: CompetitionSummary | null
+    competition: CompetitionSummary | null,
+    storedState: { rejectionReason: string | null; bidError: string | null } = {
+      rejectionReason: null,
+      bidError: null,
+    }
   ): JobDetailData {
     const summary = this.mapToJobSummary(project, postedLabel);
     const description = splitParagraphs(project.description ?? project.preview_description ?? "");
@@ -638,6 +654,8 @@ export class FreelancerApiClient {
       ...summary,
       status: storedStatus,
       matchScore: storedMatchScore ?? undefined,
+      rejectionReason: storedState.rejectionReason ?? null,
+      bidError: storedState.bidError ?? null,
       description:
         description.length > 0
           ? description

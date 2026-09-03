@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 import { getDb } from "../../db/index.js";
 import { AppError } from "../../lib/errors.js";
@@ -18,6 +18,7 @@ import {
 } from "../jobs/jobs.service.js";
 import { getProfile } from "../profile/profile.service.js";
 import { generateProposal } from "../proposals/proposals.service.js";
+import { sendDiscordEvent } from "../discord/discord.service.js";
 import {
   splitParagraphs,
   type FreelancerProject,
@@ -28,7 +29,7 @@ import { MAX_CONSECUTIVE_ERRORS } from "../logs/logs.service.js";
 const log = createLogger("bid");
 
 /** Default bid delivery period (days) and milestone percentage for auto-bids. */
-const DEFAULT_BID_PERIOD = 1;
+const DEFAULT_BID_PERIOD = 4;
 // Freelancer.com requires milestone percentage to be in [20, 100]; 0 is
 // rejected upstream, so auto-bids default to a 50% milestone.
 const DEFAULT_MILESTONE_PERCENTAGE = 50;
@@ -365,13 +366,16 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
   }
 
   // Find analyzed jobs with match score >= threshold that don't have a user bid
+  // and haven't already had a failed automatic bid attempt (never retry those —
+  // the user handles them manually).
   const candidateJobs = getDb()
     .select()
     .from(jobsTable)
     .where(
       and(
         eq(jobsTable.status, "analyzed"),
-        sql`${jobsTable.matchScore} >= ${settings.minMatchScore}`
+        sql`${jobsTable.matchScore} >= ${settings.minMatchScore}`,
+        isNull(jobsTable.autoBidFailedAt)
       )
     )
     .all();
@@ -469,16 +473,41 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
       );
 
       log.info(`Auto-bid placed: ${bidId} for project ${job.projectId} at $${bidAmount}`);
+
+      void sendDiscordEvent(
+        userId,
+        "bid_placed",
+        `✅ Auto-bid placed on **${job.title}** for **$${bidAmount}** (score ${job.matchScore}). https://www.freelancer.com/projects/${job.projectId}`
+      );
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const failedAt = new Date().toISOString();
+
+      // Mark the job so the auto engine never retries it; the user handles it
+      // manually. The failure stays visible in the matches list.
+      getDb()
+        .update(jobsTable)
+        .set({
+          autoBidFailedAt: failedAt,
+          autoBidError: message.slice(0, 500),
+          updatedAt: failedAt,
+        })
+        .where(eq(jobsTable.projectId, job.projectId))
+        .run();
+
       await logRun(
         userId,
         "Auto-bid failed",
-        `Project ${job.projectId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        `Project ${job.projectId}: ${message}`,
         "error"
       );
-      log.error(`Auto-bid failed for project ${job.projectId}:`, {
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
+      log.error(`Auto-bid failed for project ${job.projectId}:`, { error: message });
+
+      void sendDiscordEvent(
+        userId,
+        "bid_failed",
+        `⚠️ Auto-bid failed on **${job.title}** — ${message}. It won't be retried automatically; handle it manually. https://www.freelancer.com/projects/${job.projectId}`
+      );
     }
   }
 
@@ -651,6 +680,13 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
         "error"
       );
     }
+    void sendDiscordEvent(
+      userId,
+      "api_error",
+      `🚨 Freelancer Agent hit an API issue: credentials invalid — ${
+        error instanceof Error ? error.message : "Unknown error"
+      }. The worker paused itself.`
+    );
     return { status: "error", jobsFound: 0, analyzed: 0, drafted: 0, bidsPlaced: 0 };
   }
 
@@ -693,6 +729,26 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
         try {
           await analyzeJob(job.projectId, userId);
           analyzed++;
+
+          // Notify when a just-analyzed job clears the auto-bid criteria —
+          // that is the "meets criteria" signal the user opted into.
+          const analyzedRow = getDb()
+            .select()
+            .from(jobsTable)
+            .where(eq(jobsTable.projectId, job.projectId))
+            .get();
+          if (
+            analyzedRow !== undefined &&
+            analyzedRow.status === "analyzed" &&
+            analyzedRow.matchScore !== null &&
+            analyzedRow.matchScore >= settings.minMatchScore
+          ) {
+            void sendDiscordEvent(
+              userId,
+              "match",
+              `🎯 New match: **${analyzedRow.title}** — score ${analyzedRow.matchScore} (threshold ${settings.minMatchScore}). https://www.freelancer.com/projects/${analyzedRow.projectId}`
+            );
+          }
         } catch (error) {
           await logRun(
             userId,
@@ -723,7 +779,8 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
         .where(
           and(
             eq(jobsTable.status, "analyzed"),
-            sql`${jobsTable.matchScore} >= ${settings.minMatchScore}`
+            sql`${jobsTable.matchScore} >= ${settings.minMatchScore}`,
+            isNull(jobsTable.autoBidFailedAt)
           )
         )
         .all();
@@ -855,6 +912,14 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
         "error"
       );
     }
+
+    void sendDiscordEvent(
+      userId,
+      "api_error",
+      `🚨 Freelancer Agent hit an API issue: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }.`
+    );
 
     return {
       status: "error",

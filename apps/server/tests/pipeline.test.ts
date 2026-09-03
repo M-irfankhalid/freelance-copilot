@@ -24,6 +24,9 @@ let realFetch: typeof fetch;
 const PROJECT_ID = 600001;
 const BIDDER_ID = 77124963;
 
+/** When set, the bid POST for this project returns an upstream rejection. */
+let failBidProjectId: number | null = null;
+
 /** Project returned by Freelancer.com search and getJobById. */
 const projectDetail = {
   id: PROJECT_ID,
@@ -159,6 +162,22 @@ function stubFetch() {
 
       // Freelancer.com POST /bids
       if (url.includes("freelancer.com/api/projects/0.1/bids") && init?.method === "POST") {
+        let projectId: number | null = null;
+        try {
+          const body = JSON.parse(init?.body as string ?? "{}") as { project_id?: number };
+          projectId = body.project_id ?? null;
+        } catch {
+          // fall through with no project id
+        }
+        if (projectId !== null && projectId === failBidProjectId) {
+          return new Response(
+            JSON.stringify({
+              status: "error",
+              message: "You must sign an NDA before bidding on this project.",
+            }),
+            { status: 400 }
+          );
+        }
         return new Response(JSON.stringify({ status: "success", result: { bid_id: 999999 } }), { status: 200 });
       }
 
@@ -468,6 +487,147 @@ describe("pipeline run", () => {
       expect(bid?.via).toBe("auto");
       // Amount comes from the project's minimum budget ($400, clamped to minBid $500).
       expect(bid?.amount).toBe(500);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("marks a failed auto-bid so it is never retried, and surfaces it in matches", async () => {
+    // Enable auto-bid below the job's relevancy score so the fresh project qualifies.
+    const settingsRes = await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ autobidEnabled: true, minMatchScore: 70, dailyCap: 5 }),
+    });
+    expect(settingsRes.status).toBe(200);
+
+    // A fresh project whose bid the upstream rejects — the common case where a
+    // freelancer must sign an NDA (or similar) before bidding.
+    const failProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 2,
+      title: "React dashboard with NDA required",
+      description: "I need a React dashboard built. You must sign an NDA before bidding.",
+      preview_description: "React dashboard, NDA required before bidding.",
+      budget: { minimum: 600, maximum: 3000, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 1800,
+    };
+    searchResponse.result.projects.push(failProject);
+    failBidProjectId = failProject.id;
+
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as {
+        status: string;
+        jobsFound: number;
+        analyzed: number;
+        drafted: number;
+        bidsPlaced: number;
+      };
+      expect(result.status).toBe("ok");
+      expect(result.jobsFound).toBe(3);
+      // The fresh project is analyzed and drafted, but the bid is rejected.
+      expect(result.analyzed).toBe(1);
+      expect(result.drafted).toBe(1);
+      expect(result.bidsPlaced).toBe(0);
+
+      // The job is marked so the auto engine never retries it, with the reason kept.
+      const { getDb: db } = await import("../src/db/index.js");
+      const { jobs } = await import("../src/db/schema.js");
+      const row = db()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, failProject.id))
+        .get();
+      expect(row?.autoBidFailedAt).toBeTruthy();
+      expect(row?.autoBidError).toContain("NDA");
+
+      // The failure is visible in the matches list so the user handles it manually.
+      const matchesRes = await realFetch(`${baseUrl}/api/jobs/matches`, {
+        method: "GET",
+        headers: authed(),
+      });
+      expect(matchesRes.status).toBe(200);
+      const { matches } = (await matchesRes.json()) as {
+        matches: Array<{ jobId: string; bidFailed: boolean; bidError: string | null }>;
+      };
+      const failedMatch = matches.find((m) => m.jobId === String(failProject.id));
+      expect(failedMatch?.bidFailed).toBe(true);
+      expect(failedMatch?.bidError).toContain("NDA");
+
+      // A second run does NOT retry the failed bid — no draft, no bid attempt.
+      const again = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(again.status).toBe(200);
+      const result2 = (await again.json()) as {
+        analyzed: number;
+        drafted: number;
+        bidsPlaced: number;
+      };
+      expect(result2.analyzed).toBe(0);
+      expect(result2.drafted).toBe(0);
+      expect(result2.bidsPlaced).toBe(0);
+    } finally {
+      failBidProjectId = null;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("records why a job was rejected by the profile filters, and shows it on the job detail", async () => {
+    // The profile's notWants includes "crypto"; a project about cryptocurrency
+    // trips the deterministic keyword filter before any AI call is made.
+    const cryptoProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 3,
+      title: "Cryptocurrency trading bot",
+      description: "Build a cryptocurrency trading bot with React and Node.js.",
+      preview_description: "Cryptocurrency trading bot.",
+      budget: { minimum: 800, maximum: 4000, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 900,
+    };
+    searchResponse.result.projects.push(cryptoProject);
+
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { status: string; analyzed: number };
+      expect(result.status).toBe("ok");
+      // The one new job is processed and ends up rejected (no successful analysis).
+      expect(result.analyzed).toBe(1);
+
+      // The stored row carries the human-readable reason.
+      const { getDb: db } = await import("../src/db/index.js");
+      const { jobs } = await import("../src/db/schema.js");
+      const row = db()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, cryptoProject.id))
+        .get();
+      expect(row?.status).toBe("ignored");
+      expect(row?.rejectionReason).toContain("Filtered out by your profile filters");
+
+      // The reason is visible on the job detail endpoint too.
+      const detailRes = await realFetch(`${baseUrl}/api/jobs/${cryptoProject.id}`, {
+        method: "GET",
+        headers: authed(),
+      });
+      expect(detailRes.status).toBe(200);
+      const { job } = (await detailRes.json()) as {
+        job: { status: string; rejectionReason: string | null };
+      };
+      expect(job.status).toBe("ignored");
+      expect(job.rejectionReason).toContain("Filtered out by your profile filters");
     } finally {
       vi.unstubAllGlobals();
     }

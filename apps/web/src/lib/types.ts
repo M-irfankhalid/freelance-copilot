@@ -39,6 +39,14 @@ export interface JobSummary {
   matchScore?: number;
   severity?: JobSeverity;
   status: JobStatus;
+  /** Why the job was rejected/ignored, when status is "ignored". */
+  rejectionReason?: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded?: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia?: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome?: "in_review" | "won" | "lost" | null;
 }
 
 export interface JobClientInfo {
@@ -112,6 +120,8 @@ export interface JobDetailData extends JobSummary {
   competition?: CompetitionSummary | null;
   insights: BidInsights;
   suggestion: JobAiSuggestion;
+  /** Error from the last failed automatic bid attempt, if any. */
+  bidError?: string | null;
 }
 
 /* -------------------------------- Matches -------------------------------- */
@@ -129,18 +139,30 @@ export interface MatchItem {
   missingSkills: string[];
   concerns: string[];
   explanation: string;
+  /** True when the last automatic bid attempt failed and won't be retried. */
+  bidFailed: boolean;
+  /** Error message from the failed automatic bid attempt, when present. */
+  bidError: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome: "in_review" | "won" | "lost" | null;
 }
 
 /* ------------------------------- Proposals ------------------------------- */
 
 export type ProposalStatus =
   | "awaiting_approval"
+  | "approved"
   | "draft"
   | "queued"
   | "submitted"
   | "viewed"
   | "shortlisted"
-  | "declined";
+  | "declined"
+  | "won";
 
 export interface ProposalSummary {
   id: string;
@@ -291,6 +313,19 @@ export interface AutomationRun {
   action: string;
   detail: string;
   result: AutomationRunResult;
+}
+
+/* -------------------------------- Discord -------------------------------- */
+
+/** Events the worker can push to a Discord channel. */
+export type DiscordEvent = "match" | "bid_placed" | "bid_failed" | "api_error";
+
+/** Discord config as returned by the API — never contains the webhook URL. */
+export interface DiscordSettings {
+  configured: boolean;
+  /** Masked webhook preview, e.g. "https••••••ook". */
+  webhookPreview: string | null;
+  events: DiscordEvent[];
 }
 
 /* --------------------------------- Profile ------------------------------- */

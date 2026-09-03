@@ -105,6 +105,28 @@ function errorText(cause: unknown, fallback: string): string {
 }
 
 /**
+ * The server rejects an invalid profile with a zod flatten() body under
+ * error.details ({ fieldErrors, formErrors }). Render the field names so a
+ * rejected save names its cause instead of showing only the generic message.
+ */
+function validationDetailLines(details: unknown): string[] {
+  if (details === null || typeof details !== "object") return [];
+  const d = details as {
+    fieldErrors?: Record<string, unknown>;
+    formErrors?: unknown;
+  };
+  const lines: string[] = [];
+  for (const [field, raw] of Object.entries(d.fieldErrors ?? {})) {
+    const messages = Array.isArray(raw) ? raw.filter((m) => typeof m === "string") : [];
+    if (messages.length > 0) lines.push(`${field}: ${messages.join("; ")}`);
+  }
+  if (Array.isArray(d.formErrors) && d.formErrors.length > 0) {
+    lines.push(`form: ${d.formErrors.join("; ")}`);
+  }
+  return lines;
+}
+
+/**
  * The profile API stores empty text fields as null. Normalize a server-loaded
  * profile back to strings/arrays so the form inputs are controlled and saving
  * never trips on a null. Returns null when there is no saved profile.
@@ -229,7 +251,12 @@ export default function ProfilePage() {
       window.setTimeout(() => setJustSaved(false), 2000);
       void stored.refetch();
     } catch (cause) {
-      setSaveError(errorText(cause, "Could not save profile"));
+      let text = errorText(cause, "Could not save profile");
+      if (cause instanceof ApiError && cause.code === "VALIDATION_ERROR") {
+        const lines = validationDetailLines(cause.details);
+        if (lines.length > 0) text += "\n" + lines.join("\n");
+      }
+      setSaveError(text);
     } finally {
       setSaving(false);
     }
@@ -282,9 +309,9 @@ export default function ProfilePage() {
       />
 
       {saveError !== null ? (
-        <p className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+        <p className="flex items-start gap-2 whitespace-pre-line rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
           <CircleX className="mt-0.5 size-4 shrink-0" aria-hidden />
-          {saveError}
+          <span>{saveError}</span>
         </p>
       ) : null}
 

@@ -3,7 +3,9 @@ import {
   CircleX,
   Info,
   PlugZap,
+  Send,
   TriangleAlert,
+  Trophy,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -116,5 +118,42 @@ export function ScoreChip({ score }: { score: number }) {
     >
       {score}
     </span>
+  );
+}
+
+/**
+ * Label for a job/match the user already bid. Won and lost get their own pill;
+ * anything still in review reads as "Bid placed". Renders nothing when no bid
+ * was placed, so callers can drop it in next to the score chip unconditionally.
+ */
+export function BidStateBadge({
+  bidded,
+  outcome,
+}: {
+  bidded?: boolean;
+  outcome?: "in_review" | "won" | "lost" | null;
+}) {
+  if (!bidded) return null;
+  if (outcome === "won") {
+    return (
+      <Badge variant="outline" className="border-transparent bg-success/10 text-success">
+        <Trophy className="size-3" aria-hidden />
+        Won
+      </Badge>
+    );
+  }
+  if (outcome === "lost") {
+    return (
+      <Badge variant="outline" className="border-transparent bg-destructive/10 text-destructive">
+        <CircleX className="size-3" aria-hidden />
+        Lost
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="border-transparent bg-success/10 text-success">
+      <Send className="size-3" aria-hidden />
+      Bid placed
+    </Badge>
   );
 }

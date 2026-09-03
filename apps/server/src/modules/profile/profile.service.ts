@@ -56,7 +56,7 @@ export const profileSchema = z.object({
   /** Markdown summary of portfolio projects, used during proposal generation. */
   portfolioSummary: z.string().max(20_000).nullable().optional(),
   /** Markdown block holding all proposal templates, used during proposal generation. */
-  proposalTemplates: z.string().max(20_000).nullable().optional(),
+  proposalTemplates: z.string().max(30_000).nullable().optional(),
 });
 
 export type ProfileData = z.infer<typeof profileSchema>;

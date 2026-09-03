@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import {
   Clock,
   Filter,
+  Info,
   Link2,
   MapPin,
   RefreshCw,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
-import { ScoreChip } from "@/components/shared/badges";
+import { BidStateBadge, ScoreChip } from "@/components/shared/badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +23,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -63,11 +65,23 @@ export default function JobsPage() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortBy>("newest");
+  // The pipeline marks many found projects ignored (country, keywords, AI
+  // gate). Keep them out of the feed by default; uncheck to see everything.
+  const [hideIgnored, setHideIgnored] = useState(true);
+
+  const ignoredCount = useMemo(
+    () => jobs.filter((job) => job.status === "ignored").length,
+    [jobs]
+  );
 
   const visible = useMemo(() => {
     let list = [...jobs];
     if (statusFilter !== "all") {
       list = list.filter((job) => job.status === statusFilter);
+    }
+    // Hiding yields to an explicit "Ignored" filter so the option still works.
+    if (hideIgnored && statusFilter !== "ignored") {
+      list = list.filter((job) => job.status !== "ignored");
     }
     if (query.trim()) {
       const q = query.toLowerCase();
@@ -84,7 +98,7 @@ export default function JobsPage() {
       list.sort((a, b) => b.bidCount - a.bidCount);
     }
     return list;
-  }, [jobs, query, sortBy, statusFilter]);
+  }, [jobs, query, sortBy, statusFilter, hideIgnored]);
 
   const handleScan = async () => {
     try {
@@ -158,6 +172,25 @@ export default function JobsPage() {
             <SelectItem value="ignored">Ignored</SelectItem>
           </SelectContent>
         </Select>
+        <label
+          className="flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/60"
+          title={
+            statusFilter === "ignored"
+              ? "Ignored jobs are visible because the status filter is set to Ignored."
+              : "Keep jobs the pipeline ignored out of the list."
+          }
+        >
+          <Checkbox
+            checked={hideIgnored}
+            onCheckedChange={(value) => setHideIgnored(value === true)}
+          />
+          <span className="select-none">Hide ignored jobs</span>
+          {hideIgnored && statusFilter !== "ignored" && ignoredCount > 0 ? (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs tabular-nums">
+              {ignoredCount} hidden
+            </span>
+          ) : null}
+        </label>
         <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
           <SelectTrigger aria-label="Sort">
             <SelectValue />
@@ -238,13 +271,20 @@ export default function JobsPage() {
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
                     <CardTitle className="group-hover:underline">{job.title}</CardTitle>
-                    {job.matchScore !== undefined && job.matchScore > 0 ? (
-                      <ScoreChip score={job.matchScore} />
-                    ) : (
-                      <Badge variant="outline" className="shrink-0 text-muted-foreground">
-                        Not analyzed
-                      </Badge>
-                    )}
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                      {job.matchScore !== undefined && job.matchScore > 0 ? (
+                        <ScoreChip score={job.matchScore} />
+                      ) : job.status === "ignored" ? (
+                        <Badge variant="outline" className="shrink-0 text-muted-foreground">
+                          Ignored
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="shrink-0 text-muted-foreground">
+                          Not analyzed
+                        </Badge>
+                      )}
+                      <BidStateBadge bidded={job.bidded} outcome={job.bidOutcome} />
+                    </div>
                   </div>
                   <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span>{job.client}</span>
@@ -254,6 +294,14 @@ export default function JobsPage() {
                     </span>
                   </CardDescription>
                 </CardHeader>
+                {job.status === "ignored" && job.rejectionReason ? (
+                  <div className="px-6">
+                    <p className="flex items-start gap-2 rounded-lg border border-muted bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                      <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                      <span className="line-clamp-2">{job.rejectionReason}</span>
+                    </p>
+                  </div>
+                ) : null}
                 <CardContent className="flex min-h-11 flex-wrap items-center gap-1.5">
                   {job.skills.slice(0, 4).map((skill) => (
                     <Badge key={skill} variant="secondary" className="font-normal">

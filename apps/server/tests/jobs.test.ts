@@ -478,4 +478,66 @@ describe("jobs", () => {
       .get();
     expect(usRow?.rawData).toBeTruthy();
   });
+
+  it("labels stored jobs with their ignore reason and bid state on the list", async () => {
+    // Force a deterministic ignore reason, then attach a placed auto-bid to a
+    // separate job so the cached list can label both.
+    const ignore = await realFetch(`${baseUrl}/api/jobs/100001/ignore`, {
+      method: "POST",
+      headers: authed(),
+    });
+    expect(ignore.status).toBe(200);
+
+    const { getDb } = await import("../src/db/index.js");
+    const { users, userBids } = await import("../src/db/schema.js");
+    const user = getDb()
+      .select({ id: users.id })
+      .from(users)
+      .limit(1)
+      .get();
+    if (user === undefined) throw new Error("No user row to attach a placed bid to");
+
+    const now = new Date().toISOString();
+    getDb()
+      .insert(userBids)
+      .values({
+        id: `bid-100002-${Date.now()}`,
+        userId: user.id,
+        projectId: 100002,
+        jobTitle: "Build a React dashboard",
+        client: "Acme Client",
+        amount: 250,
+        period: 7,
+        description: "Submitted proposal text",
+        status: "submitted",
+        outcome: "won",
+        via: "auto",
+        submittedAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const r = await realFetch(`${baseUrl}/api/jobs?limit=100`, { headers: authed() });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      jobs: Array<{
+        projectId: number;
+        status: string;
+        rejectionReason: string | null;
+        bidded: boolean;
+        bidVia: string | null;
+        bidOutcome: string | null;
+      }>;
+    };
+
+    const ignored = body.jobs.find((job) => job.projectId === 100001);
+    expect(ignored?.status).toBe("ignored");
+    expect(ignored?.rejectionReason).toBe("Marked ignored by you.");
+    expect(ignored?.bidded).toBe(false);
+
+    const bidded = body.jobs.find((job) => job.projectId === 100002);
+    expect(bidded?.bidded).toBe(true);
+    expect(bidded?.bidVia).toBe("auto");
+    expect(bidded?.bidOutcome).toBe("won");
+  });
 });

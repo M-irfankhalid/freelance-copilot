@@ -2,8 +2,8 @@ import { getDb } from "../../db/index.js";
 import { AppError, notFound } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
 import { createLogger } from "../../lib/logger.js";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
-import { platformCredentials, jobs as jobsTable, bids as bidsTable } from "../../db/schema.js";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { platformCredentials, jobs as jobsTable, bids as bidsTable, userBids } from "../../db/schema.js";
 import { getProfile } from "../profile/profile.service.js";
 import { checkRelevancyWithAI } from "../ai/ai.service.js";
 import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
@@ -141,6 +141,7 @@ function storeBids(projectId: number, bids: FreelancerBid[], fetchedAt: string):
  * synced.
  */
 export function listStoredJobs(
+  userId: string,
   filters: {
     limit?: number;
     offset?: number;
@@ -179,7 +180,7 @@ export function listStoredJobs(
         .offset(effectiveOffset)
         .all();
 
-  let summaries = rows.map((row) => {
+  let summaries: JobSummary[] = rows.map((row) => {
     let parsedSkills: string[] = [];
     if (row.skills) {
       try {
@@ -203,8 +204,52 @@ export function listStoredJobs(
       matchScore: row.matchScore ?? undefined,
       severity: (row.severity ?? undefined) as "urgent" | "warning" | "info" | undefined,
       status: row.status as "new" | "analyzed" | "ignored",
+      rejectionReason: row.rejectionReason ?? null,
+      bidded: false,
+      bidVia: null,
+      bidOutcome: null,
     };
   });
+
+  // A placed bid lives in user_bids — the record written whenever a manual or
+  // automatic bid is submitted. Surface it so the UI can label jobs the user
+  // has already acted on. Newest bid wins when several exist.
+  const projectIds = summaries.map((job) => job.projectId);
+  const bidsByProject = new Map<
+    number,
+    { via: "manual" | "auto"; outcome: "in_review" | "won" | "lost" | null }
+  >();
+  if (projectIds.length > 0) {
+    const placedBids = getDb()
+      .select({
+        projectId: userBids.projectId,
+        via: userBids.via,
+        outcome: userBids.outcome,
+      })
+      .from(userBids)
+      .where(and(eq(userBids.userId, userId), inArray(userBids.projectId, projectIds)))
+      .orderBy(desc(userBids.submittedAt))
+      .all();
+    for (const bid of placedBids) {
+      if (!bidsByProject.has(bid.projectId)) {
+        bidsByProject.set(bid.projectId, {
+          via: bid.via === "auto" ? "auto" : "manual",
+          outcome:
+            bid.outcome === "won" || bid.outcome === "lost"
+              ? bid.outcome
+              : bid.outcome === "in_review"
+                ? "in_review"
+                : null,
+        });
+      }
+    }
+  }
+  summaries = summaries.map((job) => ({
+    ...job,
+    bidded: bidsByProject.has(job.projectId),
+    bidVia: bidsByProject.get(job.projectId)?.via ?? null,
+    bidOutcome: bidsByProject.get(job.projectId)?.outcome ?? null,
+  }));
 
   // Apply skills filter (name substring match) after retrieving from DB.
   if (skills && skills.length > 0) {
@@ -230,6 +275,16 @@ export interface MatchItem {
   missingSkills: string[];
   concerns: string[];
   explanation: string;
+  /** True when the last automatic bid attempt failed and won't be retried. */
+  bidFailed: boolean;
+  /** Error message from the failed automatic bid attempt, when present. */
+  bidError: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome: "in_review" | "won" | "lost" | null;
 }
 
 /**
@@ -248,6 +303,40 @@ export function listMatches(userId: string): MatchItem[] {
     .orderBy(desc(jobsTable.matchScore))
     .limit(100)
     .all();
+
+  // A placed bid lives in user_bids — the record written whenever a manual or
+  // automatic bid is submitted. Surface it so the UI can label or hide jobs
+  // the user has already acted on. Newest bid wins when several exist.
+  const projectIds = rows.map((r) => r.projectId);
+  const bidsByProject = new Map<
+    number,
+    { via: "manual" | "auto"; outcome: "in_review" | "won" | "lost" | null }
+  >();
+  if (projectIds.length > 0) {
+    const placedBids = getDb()
+      .select({
+        projectId: userBids.projectId,
+        via: userBids.via,
+        outcome: userBids.outcome,
+      })
+      .from(userBids)
+      .where(and(eq(userBids.userId, userId), inArray(userBids.projectId, projectIds)))
+      .orderBy(desc(userBids.submittedAt))
+      .all();
+    for (const bid of placedBids) {
+      if (!bidsByProject.has(bid.projectId)) {
+        bidsByProject.set(bid.projectId, {
+          via: bid.via === "auto" ? "auto" : "manual",
+          outcome:
+            bid.outcome === "won" || bid.outcome === "lost"
+              ? bid.outcome
+              : bid.outcome === "in_review"
+                ? "in_review"
+                : null,
+        });
+      }
+    }
+  }
 
   return rows.map((row) => {
     const score = Number(row.matchScore);
@@ -286,6 +375,11 @@ export function listMatches(userId: string): MatchItem[] {
       missingSkills,
       concerns: stored?.concerns ?? [],
       explanation: stored?.summary ?? "",
+      bidFailed: row.autoBidFailedAt !== null,
+      bidError: row.autoBidError ?? null,
+      bidded: bidsByProject.has(row.projectId),
+      bidVia: bidsByProject.get(row.projectId)?.via ?? null,
+      bidOutcome: bidsByProject.get(row.projectId)?.outcome ?? null,
     };
   });
 }
@@ -348,6 +442,7 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             avgBidLabel: "",
             status: "ignored",
             ignoredAt: now,
+            rejectionReason: `Excluded — the client is in ${summary.clientCountry}, a country on your ignore list.`,
             importedAt: now,
             updatedAt: now,
           })
@@ -375,8 +470,8 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
       }
       log.info(
         ignored
-          ? `Stored job ${summary.id} from ${summary.clientCountry} as ignored (on ignore list)`
-          : `Stored new job ${summary.id}: ${summary.title}`
+          ? `Project ${project.id} (${summary.title}): IGNORED — client is in ${summary.clientCountry}, a country on your ignore list`
+          : `Project ${project.id} (${summary.title}): stored as new — country check passed`
       );
       summaries.push({ ...summary, status: storedStatus });
     } else {
@@ -390,10 +485,14 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             status: "ignored",
             rawData: null,
             ignoredAt: now,
+            rejectionReason: `Excluded — the client is in ${summary.clientCountry}, a country on your ignore list.`,
             updatedAt: now,
           })
           .where(eq(jobsTable.projectId, project.id))
           .run();
+        log.info(
+          `Project ${project.id} (${summary.title}): IGNORED — client is in ${summary.clientCountry}, a country on your ignore list`
+        );
       } else {
         // Refresh the live fields, but keep the user's analysis state.
         getDb()
@@ -413,6 +512,9 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
           })
           .where(eq(jobsTable.projectId, project.id))
           .run();
+        log.info(
+          `Project ${project.id} (${summary.title}): already stored (${existing.status}) — refreshed live data`
+        );
       }
       summaries.push({
         ...summary,
@@ -423,7 +525,7 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
     }
   }
 
-  log.info(`Search returned ${summaries.length} jobs`);
+  log.info(`Found ${summaries.length} project(s) on Freelancer.com`);
   return summaries;
 }
 
@@ -510,7 +612,11 @@ export async function getJobById(projectId: number): Promise<JobDetailResponse> 
     storedAnalysis,
     refreshed.status as JobDetailResponse["status"],
     refreshed.matchScore,
-    competition
+    competition,
+    {
+      rejectionReason: refreshed.rejectionReason ?? null,
+      bidError: refreshed.autoBidError ?? null,
+    }
   );
 }
 
@@ -612,10 +718,17 @@ export async function analyzeJob(
     const now = new Date().toISOString();
     getDb()
       .update(jobsTable)
-      .set({ status: "ignored", ignoredAt: now, updatedAt: now })
+      .set({
+        status: "ignored",
+        ignoredAt: now,
+        rejectionReason: `Excluded — the client is in ${countryLabel}, a country on your ignore list.`,
+        updatedAt: now,
+      })
       .where(eq(jobsTable.projectId, projectId))
       .run();
-    log.info(`Ignored job ${projectId} from ${countryLabel} (on ignore list)`);
+    log.info(
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — client country ${countryLabel} is on your ignore list`
+    );
     return {
       jobId: `job-${projectId}`,
       projectId,
@@ -639,11 +752,18 @@ export async function analyzeJob(
   const storeIgnored = (
     score: number,
     concerns: string[],
-    summary: string
+    summary: string,
+    reason: string
   ): JobAnalysis => {
     getDb()
       .update(jobsTable)
-      .set({ status: "ignored", matchScore: score, ignoredAt: now, updatedAt: now })
+      .set({
+        status: "ignored",
+        matchScore: score,
+        ignoredAt: now,
+        rejectionReason: reason,
+        updatedAt: now,
+      })
       .where(eq(jobsTable.projectId, projectId))
       .run();
     return {
@@ -670,12 +790,13 @@ export async function analyzeJob(
   });
   if (!decision.relevant) {
     log.info(
-      `Job ${projectId} filtered out before AI: ${decision.reasons.join("; ")}`
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — ${decision.reasons.join("; ")}`
     );
     return storeIgnored(
       0,
       decision.reasons,
-      "This job was filtered out by your profile filters before any AI analysis was run. Update your wants, not-wants, or skills to re-evaluate it."
+      "This job was filtered out by your profile filters before any AI analysis was run. Update your wants, not-wants, or skills to re-evaluate it.",
+      `Filtered out by your profile filters: ${decision.reasons.join("; ")}`
     );
   }
 
@@ -690,12 +811,13 @@ export async function analyzeJob(
 
   if (!check.relevant) {
     log.info(
-      `Job ${projectId} marked ignored by relevance gate: ${check.reasons.join("; ")}`
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — relevance model: ${check.reasons.join("; ")}`
     );
     return storeIgnored(
       check.score,
       check.reasons,
-      check.summary || "Marked irrelevant by the relevance model."
+      check.summary || "Marked irrelevant by the relevance model.",
+      `Marked irrelevant by the relevance model: ${check.summary || check.reasons.join("; ")}`
     );
   }
 
@@ -754,7 +876,9 @@ export async function analyzeJob(
       .run();
   }
 
-  log.info(`Analyzed job ${projectId}: ${storedAnalysis.verdict} (${check.score}%)`);
+  log.info(
+    `Project ${projectId} (${project.title ?? "(untitled project)"}): PASSED — relevance score ${check.score}/100 (${storedAnalysis.verdict})`
+  );
   return {
     jobId: `job-${projectId}`,
     projectId,
@@ -770,7 +894,12 @@ export async function analyzeJob(
 export async function ignoreJob(projectId: number): Promise<void> {
   const result = getDb()
     .update(jobsTable)
-    .set({ status: "ignored", ignoredAt: new Date().toISOString() })
+    .set({
+      status: "ignored",
+      ignoredAt: new Date().toISOString(),
+      rejectionReason: "Marked ignored by you.",
+      updatedAt: new Date().toISOString(),
+    })
     .where(eq(jobsTable.projectId, projectId))
     .run();
   if (result.changes === 0) {

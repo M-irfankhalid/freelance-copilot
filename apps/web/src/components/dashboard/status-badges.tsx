@@ -1,5 +1,6 @@
 import {
   AlarmClock,
+  BadgeCheck,
   CircleX,
   Eye,
   FileText,
@@ -33,6 +34,11 @@ const proposalStatusMeta: Record<
     icon: AlarmClock,
     className: "border-border text-foreground",
   },
+  approved: {
+    label: "Approved",
+    icon: BadgeCheck,
+    className: "border-transparent bg-primary/10 text-primary",
+  },
   draft: { label: "Draft", icon: FileText, className: "border-border text-muted-foreground" },
   queued: { label: "Queued for submission", icon: Timer },
   submitted: { label: "Submitted", icon: Send },
@@ -47,10 +53,20 @@ const proposalStatusMeta: Record<
     icon: X,
     className: "bg-destructive/10 text-destructive border-transparent",
   },
+  won: {
+    label: "Won",
+    icon: Trophy,
+    className: "border-transparent bg-success/10 text-success",
+  },
 };
 
 export function ProposalStatusBadge({ status }: { status: ProposalStatus }) {
-  const meta = proposalStatusMeta[status];
+  // Defensive: proposal status lives in a free TEXT column, so a legacy or
+  // out-of-band value must degrade to a plain label — never crash the page.
+  const meta = proposalStatusMeta[status] ?? {
+    label: status,
+    className: "border-border text-muted-foreground",
+  };
   const Icon = meta.icon;
 
   return (

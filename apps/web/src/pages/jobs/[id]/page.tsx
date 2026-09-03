@@ -327,6 +327,28 @@ export default function JobDetailPage() {
         </div>
       </div>
 
+      {/* Why this job was rejected/ignored */}
+      {job.status === "ignored" && job.rejectionReason ? (
+        <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+          <p>
+            <span className="font-medium">Why this job was rejected:</span>{" "}
+            {job.rejectionReason}
+          </p>
+        </div>
+      ) : null}
+
+      {/* Auto-bid failure — the engine won't retry; handle manually */}
+      {job.bidError ? (
+        <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+          <p>
+            <span className="font-medium">Automatic bid failed — handle this one manually.</span>{" "}
+            {job.bidError}
+          </p>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
         {/* Main column */}
         <div className="flex min-w-0 flex-col gap-4">

@@ -206,6 +206,9 @@ export default function OnboardingPage() {
         preferredProjectTypes: [],
         wants,
         notWants,
+        // Country blocking is optional; default to no exclusions until the
+        // user sets them on the Profile page. The schema requires the key.
+        ignoredCountries: [],
         customInstructions: null,
       },
     });

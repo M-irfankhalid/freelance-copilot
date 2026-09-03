@@ -111,6 +111,12 @@ export const jobs = sqliteTable("jobs", {
   rawData: text("raw_data"),
   lastAnalyzedAt: text("last_analyzed_at"),
   ignoredAt: text("ignored_at"),
+  /** Why the job was rejected/ignored — set by the system or manual ignore. */
+  rejectionReason: text("rejection_reason"),
+  /** When the last automatic bid attempt failed — gates auto-bid retries. */
+  autoBidFailedAt: text("auto_bid_failed_at"),
+  /** Error message from the last failed automatic bid attempt. */
+  autoBidError: text("auto_bid_error"),
   importedAt: text("imported_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (table) => [
@@ -222,4 +228,17 @@ export const automationRuns = sqliteTable("automation_runs", {
   detail: text("detail").notNull(),
   result: text("result").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+/** Discord webhook + per-event notification toggles. Webhook encrypted at rest. */
+export const discordSettings = sqliteTable("discord_settings", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  webhookCipherText: text("webhook_cipher_text"),
+  webhookIv: text("webhook_iv"),
+  webhookAuthTag: text("webhook_auth_tag"),
+  /** JSON array of enabled events: match | bid_placed | bid_failed | api_error. */
+  events: text("events").notNull().default("[]"),
+  updatedAt: text("updated_at").notNull(),
 });

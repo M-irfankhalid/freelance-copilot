@@ -102,6 +102,10 @@ interface TJobSummary {
   matchScore?: number;
   severity?: "urgent" | "warning" | "info";
   status: "new" | "analyzed" | "ignored";
+  rejectionReason?: string | null;
+  bidded?: boolean;
+  bidVia?: "manual" | "auto" | null;
+  bidOutcome?: "in_review" | "won" | "lost" | null;
 }
 
 const PAGE_SIZE = 50;

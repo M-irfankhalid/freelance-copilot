@@ -184,7 +184,7 @@ jobsRouter.get("/", (req, res, next) => {
     const limit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
     const offset = req.query.offset !== undefined ? Number(req.query.offset) : undefined;
 
-    const jobs = listStoredJobs({
+    const jobs = listStoredJobs(req.user!.id, {
       limit: Number.isFinite(limit ?? 0) ? limit : 50,
       offset: Number.isFinite(offset ?? 0) ? offset : 0,
       skills,
