@@ -91,10 +91,8 @@ const openRouterRelevancyResponse = {
     {
       message: {
         content: JSON.stringify({
-          relevant: true,
           score: 92,
-          reasons: ["React.js is one of your strong skills", "Node.js matches your backend expertise", "Project budget aligns with your rate"],
-          summary: "Excellent match for your React and Node.js skills with a well-scoped SaaS analytics dashboard.",
+          reason: "Excellent match for your React and Node.js skills with a well-scoped SaaS analytics dashboard.",
         }),
       },
     },

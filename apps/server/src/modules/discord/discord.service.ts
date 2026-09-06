@@ -16,6 +16,8 @@ const log = createLogger("system");
 
 export const DISCORD_EVENTS = [
   "match",
+  /** A job the pipeline refused to auto-bid but the user may want to handle manually. */
+  "needs_review",
   "bid_placed",
   "bid_failed",
   "api_error",

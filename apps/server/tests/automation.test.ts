@@ -155,6 +155,9 @@ beforeAll(async () => {
         title: "Auto-bid candidate project",
         budget: { minimum: 500, maximum: 2000, project_type: "fixed" },
         type: "fixed",
+        // A real project blob carries owner_info; payment-verified client so
+        // the trust gate admits this candidate for auto-bid.
+        owner_info: { status: { payment_verified: true } },
       }),
       lastAnalyzedAt: now,
       ignoredAt: null,
@@ -345,6 +348,7 @@ describe("auto-bid engine", () => {
             title: "Second auto-bid candidate",
             budget: { minimum: 300, maximum: 1500, project_type: "fixed" },
             type: "fixed",
+            owner_info: { status: { payment_verified: true } },
           }),
           lastAnalyzedAt: now,
           ignoredAt: null,

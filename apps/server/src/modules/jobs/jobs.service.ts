@@ -21,8 +21,26 @@ import {
   splitParagraphs,
   formatBudget,
 } from "./jobs.client.js";
+import {
+  extractClientQuality,
+  serializeClientQuality,
+  accountAgeLabel,
+  reputationLabel,
+  presentUpgradeLabels,
+  clientTrustConcerns,
+} from "./client-quality.js";
 
 const log = createLogger("sync");
+
+/**
+ * Model A scores below this floor are marked ignored — not worth surfacing or
+ * bidding on at all. Scores 60+ but below the user's auto-bid threshold are
+ * surfaced for manual review when the client carries a trust concern.
+ */
+const RELEVANCE_IGNORE_FLOOR = 50;
+
+/** Scores at/above this but below the auto-bid threshold are "needs review" candidates. */
+export const MANUAL_REVIEW_FLOOR = 60;
 
 export type { JobSummary as JobResponse };
 
@@ -462,6 +480,7 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             bidCount: summary.bidCount,
             avgBidLabel: summary.avgBidLabel,
             status: storedStatus,
+            clientQuality: serializeClientQuality(extractClientQuality(project)),
             rawData: JSON.stringify(project),
             importedAt: now,
             updatedAt: now,
@@ -507,6 +526,7 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             bidCount: summary.bidCount,
             avgBidLabel: summary.avgBidLabel,
             status: existing.status,
+            clientQuality: serializeClientQuality(extractClientQuality(project)),
             rawData: JSON.stringify(project),
             updatedAt: now,
           })
@@ -576,6 +596,7 @@ export async function getJobById(projectId: number): Promise<JobDetailResponse> 
         project.bid_stats?.bid_avg !== undefined && project.bid_stats.bid_avg !== null
           ? `$${Math.round(project.bid_stats.bid_avg).toLocaleString("en-US")}`
           : existing.avgBidLabel,
+      clientQuality: serializeClientQuality(extractClientQuality(project)),
       rawData: JSON.stringify(project),
       updatedAt: now,
     })
@@ -666,6 +687,7 @@ export async function getJobByUrl(url: string): Promise<JobDetailResponse> {
             ? `$${Math.round(project.bid_stats.bid_avg).toLocaleString("en-US")}`
             : "—",
         status: "new",
+        clientQuality: serializeClientQuality(extractClientQuality(project)),
         rawData: JSON.stringify(project),
         importedAt: now,
         updatedAt: now,
@@ -800,24 +822,41 @@ export async function analyzeJob(
     );
   }
 
-  // Step 2: fast relevance model (Model A) — its score becomes matchScore and
-  // gates the auto-bid (and, while auto-bid is on, the auto-proposal) step.
+  // Step 2: fast relevance model (Model A). Its score now folds in client
+  // trustworthiness (payment/deposit verification, account age, reputation,
+  // upgrade flags) and becomes matchScore, which gates auto-bid. Below the
+  // ignore floor the job is marked ignored — not worth surfacing or bidding on.
+  const clientQuality = extractClientQuality(project);
   const check = await checkRelevancyWithAI({
     jobTitle: project.title ?? "(untitled project)",
     jobDescription,
     userSummary: profile.userSummary,
     relevancyInstructions: profile.relevancyInstructions,
+    client: {
+      country: clientQuality.country,
+      paymentVerified: clientQuality.paymentVerified,
+      emailVerified: clientQuality.emailVerified,
+      depositMade: clientQuality.depositMade,
+      accountAgeLabel: accountAgeLabel(clientQuality),
+      reputationLabel: reputationLabel(clientQuality),
+      upgrades: presentUpgradeLabels(clientQuality),
+    },
+    budgetLabel: formatBudget(project.budget, project.currency?.code),
+    projectType: project.type ?? null,
+    bidCount: project.bid_stats?.bid_count ?? 0,
   });
 
-  if (!check.relevant) {
+  const trustConcerns = clientTrustConcerns(clientQuality, project.type);
+
+  if (check.score < RELEVANCE_IGNORE_FLOOR) {
     log.info(
-      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — relevance model: ${check.reasons.join("; ")}`
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — relevance score ${check.score}/100 is below the ${RELEVANCE_IGNORE_FLOOR} floor: ${check.reason}`
     );
     return storeIgnored(
       check.score,
-      check.reasons,
-      check.summary || "Marked irrelevant by the relevance model.",
-      `Marked irrelevant by the relevance model: ${check.summary || check.reasons.join("; ")}`
+      trustConcerns.length > 0 ? trustConcerns : [check.reason],
+      check.reason,
+      `Low relevance score (${check.score}/100): ${check.reason}`
     );
   }
 
@@ -826,9 +865,9 @@ export async function analyzeJob(
   const storedAnalysis: StoredAnalysis = {
     verdict: check.score >= 80 ? "strong" : check.score >= 60 ? "good" : "fair",
     score: check.score,
-    summary: check.summary,
-    reasons: check.reasons,
-    concerns: [],
+    summary: check.reason,
+    reasons: [check.reason],
+    concerns: trustConcerns,
     recommendedBidLabel: "—",
     competitorNote: "",
   };
@@ -857,6 +896,7 @@ export async function analyzeJob(
         status: "analyzed",
         matchScore: check.score,
         analysis: JSON.stringify(storedAnalysis),
+        clientQuality: serializeClientQuality(clientQuality),
         lastAnalyzedAt: now,
         importedAt: now,
         updatedAt: now,
@@ -869,6 +909,7 @@ export async function analyzeJob(
         status: "analyzed",
         matchScore: check.score,
         analysis: JSON.stringify(storedAnalysis),
+        clientQuality: serializeClientQuality(clientQuality),
         lastAnalyzedAt: now,
         updatedAt: now,
       })
@@ -886,7 +927,7 @@ export async function analyzeJob(
     matchedSkills,
     missingSkills,
     concerns: storedAnalysis.concerns,
-    analysis: check.summary,
+    analysis: check.reason,
     recommendedBid: "—",
   };
 }

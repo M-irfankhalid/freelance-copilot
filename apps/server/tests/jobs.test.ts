@@ -185,10 +185,8 @@ beforeAll(async () => {
               {
                 message: {
                   content: JSON.stringify({
-                    relevant: true,
                     score: 78,
-                    reasons: ["React.js is one of your strong skills", "Budget fits your hourly rate"],
-                    summary: "Matches your React/Node.js skills and your want to build dashboards.",
+                    reason: "Matches your React/Node.js skills and your want to build dashboards.",
                   }),
                 },
               },

@@ -15,6 +15,8 @@ import {
   getFreelancerClient,
   searchJobs,
   analyzeJob,
+  parseStoredAnalysis,
+  MANUAL_REVIEW_FLOOR,
 } from "../jobs/jobs.service.js";
 import { getProfile } from "../profile/profile.service.js";
 import { generateProposal } from "../proposals/proposals.service.js";
@@ -24,6 +26,17 @@ import {
   type FreelancerProject,
   type JobSearchFilters,
 } from "../jobs/jobs.client.js";
+import {
+  accountAgeLabel,
+  clientTrustConcerns,
+  isAutoBidEligible,
+  isBidBlocked,
+  parseClientQuality,
+  presentUpgradeLabels,
+  qualityFromRawData,
+  reputationLabel,
+  type ClientQuality,
+} from "../jobs/client-quality.js";
 import { MAX_CONSECUTIVE_ERRORS } from "../logs/logs.service.js";
 
 const log = createLogger("bid");
@@ -408,9 +421,27 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
 
     if (!proposal) continue;
 
+    // Trust gate: never auto-bid a project that needs a signature (NDA/IP
+    // contract) or a client whose payment method isn't verified. Those bids
+    // either fail upstream or land on a client we can't trust — the user
+    // handles them manually. A stored snapshot takes priority; legacy rows
+    // fall back to the raw project blob so they're still evaluated (no forced
+    // re-analyze).
+    const parsedJob = parseJobRawData(job.rawData);
+    const quality = jobTrustQuality(job);
+    if (!isAutoBidEligible(quality, parsedJob.projectType)) {
+      await logRun(
+        userId,
+        "Auto-bid skipped",
+        `Project ${job.projectId}: not auto-bid eligible — client payment unverified or NDA/IP needs signing (handle manually)`,
+        "skipped"
+      );
+      continue;
+    }
+
     // Bid amount = the project's minimum budget (for hourly projects, its
     // hourly minimum). No budget listed → skip; auto-bid can't price it.
-    const { minimumBudget } = parseJobRawData(job.rawData);
+    const { minimumBudget } = parsedJob;
     if (minimumBudget === null) {
       await logRun(
         userId,
@@ -611,6 +642,105 @@ function parseJobRawData(rawData: string | null): {
   }
 }
 
+/**
+ * The client-trust snapshot for a job row. A stored snapshot (client_quality,
+ * written at analyze time) takes priority; legacy rows saved before the column
+ * existed fall back to the raw project blob so they still pass through the same
+ * trust gates without a forced re-analyze.
+ */
+function jobTrustQuality(job: {
+  clientQuality: string | null;
+  rawData: string | null;
+}): ClientQuality | null {
+  return parseClientQuality(job.clientQuality) ?? qualityFromRawData(job.rawData);
+}
+
+/** ✅/❌/— rendering of a verification boolean for a Discord message. */
+function checkMark(value: boolean | null): string {
+  if (value === true) return "✅ Yes";
+  if (value === false) return "❌ No";
+  return "— unknown";
+}
+
+/**
+ * The fields from a jobs row that a Discord "needs_review" alert is built from.
+ */
+export interface ReviewableJob {
+  projectId: number;
+  title: string;
+  client: string;
+  clientCountry: string;
+  budgetLabel: string;
+  postedLabel: string;
+  bidCount: number;
+  matchScore: number | null;
+  clientQuality: string | null;
+  rawData: string | null;
+  analysis: string | null;
+}
+
+/**
+ * Rich Discord content for a job the pipeline refused to auto-bid. Two tiers:
+ * NDA/IP projects (auto-bid would fail until the user signs) get the urgent
+ * header; everything else is a client-trust problem worth a manual look. The
+ * message carries the score, budget, posting time, bid count, every client
+ * verification signal we stored, and the Model A one-liner.
+ */
+export function buildNeedsReviewMessage(job: ReviewableJob, threshold: number): string {
+  const quality = jobTrustQuality(job);
+  const stored = parseStoredAnalysis(job.analysis);
+  const projectType = parseJobRawData(job.rawData).projectType;
+  const blocked = quality !== null && isBidBlocked(quality);
+
+  const part: string[] = [];
+  part.push(
+    blocked
+      ? `🚨 **Manual action required: ${job.title}**`
+      : `⚠️ **Needs your review: ${job.title}**`
+  );
+  part.push(
+    blocked
+      ? "Auto-bid can't place this — it carries an **NDA / IP contract** that must be signed before Freelancer.com accepts a bid. It's on you."
+      : "This job scored well enough to matter, but the client isn't trustworthy enough to auto-bid — decide whether to handle it manually."
+  );
+  part.push(
+    "",
+    `**Score:** ${job.matchScore ?? "—"}/100 (auto-bid threshold: ${threshold})`,
+    `**Budget:** ${job.budgetLabel}`,
+    `**Posted:** ${job.postedLabel} — **${job.bidCount} bid${job.bidCount === 1 ? "" : "s"}**`,
+    `**Client:** ${job.client}${job.clientCountry ? ` (${job.clientCountry})` : ""}`
+  );
+
+  if (quality !== null) {
+    part.push(
+      "",
+      "Client check:",
+      `• Payment method verified: ${checkMark(quality.paymentVerified)}`,
+      `• Escrow deposit history: ${checkMark(quality.depositMade)}`,
+      `• Email verified: ${checkMark(quality.emailVerified)}`,
+      `• ${accountAgeLabel(quality)}`,
+      `• ${reputationLabel(quality)}`
+    );
+    const upgrades = presentUpgradeLabels(quality);
+    if (upgrades.length > 0) {
+      part.push(`• Upgrades: ${upgrades.join(", ")}`);
+    }
+  }
+
+  const concerns =
+    stored?.concerns ??
+    (quality !== null ? clientTrustConcerns(quality, projectType) : []);
+  if (concerns.length > 0) {
+    part.push("", ...concerns.map((c) => `⚠️ ${c}`));
+  }
+  if (stored?.summary && !blocked) {
+    part.push("", `**Model A's read:** ${stored.summary}`);
+  }
+
+  part.push("", `🔗 https://www.freelancer.com/projects/${job.projectId}`);
+  return part.join("\n");
+}
+
 export interface PipelineResult {
   status: "ok" | "skipped" | "paused" | "error";
   jobsFound: number;
@@ -730,8 +860,13 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
           await analyzeJob(job.projectId, userId);
           analyzed++;
 
-          // Notify when a just-analyzed job clears the auto-bid criteria —
-          // that is the "meets criteria" signal the user opted into.
+          // Notify on just-analyzed jobs. Trustworthy clients that clear the
+          // auto-bid threshold fire the plain "match" (auto-bid follows). Jobs
+          // the pipeline must NOT auto-bid — NDA/IP signature required, or a
+          // client whose payment isn't verified — go to "needs_review" so the
+          // user decides manually. Blocked jobs always surface (auto-bid would
+          // fail); the rest only when they're worth a look (score at or above
+          // the manual review floor).
           const analyzedRow = getDb()
             .select()
             .from(jobsTable)
@@ -740,14 +875,28 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
           if (
             analyzedRow !== undefined &&
             analyzedRow.status === "analyzed" &&
-            analyzedRow.matchScore !== null &&
-            analyzedRow.matchScore >= settings.minMatchScore
+            analyzedRow.matchScore !== null
           ) {
-            void sendDiscordEvent(
-              userId,
-              "match",
-              `🎯 New match: **${analyzedRow.title}** — score ${analyzedRow.matchScore} (threshold ${settings.minMatchScore}). https://www.freelancer.com/projects/${analyzedRow.projectId}`
-            );
+            const quality = jobTrustQuality(analyzedRow);
+            const projectType = parseJobRawData(analyzedRow.rawData).projectType;
+            const eligible = isAutoBidEligible(quality, projectType);
+            const blocked = quality !== null && isBidBlocked(quality);
+            if (eligible && analyzedRow.matchScore >= settings.minMatchScore) {
+              void sendDiscordEvent(
+                userId,
+                "match",
+                `🎯 New match: **${analyzedRow.title}** — score ${analyzedRow.matchScore} (threshold ${settings.minMatchScore}). https://www.freelancer.com/projects/${analyzedRow.projectId}`
+              );
+            } else if (
+              !eligible &&
+              (blocked || analyzedRow.matchScore >= MANUAL_REVIEW_FLOOR)
+            ) {
+              void sendDiscordEvent(
+                userId,
+                "needs_review",
+                buildNeedsReviewMessage(analyzedRow, settings.minMatchScore)
+              );
+            }
           }
         } catch (error) {
           await logRun(
@@ -798,6 +947,15 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
           )
           .get();
         if (existing) continue;
+
+        // Trust gate: only auto-draft for jobs the pipeline is allowed to
+        // auto-bid (verified client payment, no NDA/IP signature). Writing a
+        // proposal for a blocked or risky job would waste a Model B call and
+        // produce a bid we'd refuse anyway.
+        const quality = jobTrustQuality(job);
+        if (!isAutoBidEligible(quality, parseJobRawData(job.rawData).projectType)) {
+          continue;
+        }
 
         try {
           const parsed = parseJobRawData(job.rawData);

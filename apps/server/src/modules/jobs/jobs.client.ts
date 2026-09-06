@@ -58,6 +58,12 @@ export interface FreelancerReputationPeriod {
   overall?: number;
   positive?: number;
   category_ratings?: FreelancerReputationCategoryRatings;
+  /** Total ratings received in the period. */
+  all?: number;
+  reviews?: number;
+  complete?: number;
+  incomplete?: number;
+  completion_rate?: number;
 }
 
 export interface FreelancerReputation {
@@ -146,6 +152,10 @@ export interface FreelancerProject {
   type?: string;
   /** Bid period in days. */
   bidperiod?: number;
+  /** Top-level convenience flags the API mirrors alongside `upgrades`. */
+  featured?: boolean;
+  urgent?: boolean;
+  assisted?: boolean;
   /** Whether the project is deleted/nonpublic/hidebids. */
   deleted?: boolean;
   nonpublic?: boolean;

@@ -84,6 +84,9 @@ function ensureSchema(db: Database.Database): void {
     if (!jobsColNames.has("raw_data")) {
       db.exec("ALTER TABLE jobs ADD COLUMN raw_data TEXT");
     }
+    if (!jobsColNames.has("client_quality")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN client_quality TEXT");
+    }
     if (!jobsColNames.has("rejection_reason")) {
       db.exec("ALTER TABLE jobs ADD COLUMN rejection_reason TEXT");
     }
@@ -195,6 +198,7 @@ function ensureSchema(db: Database.Database): void {
       severity TEXT,
       status TEXT NOT NULL,
       analysis TEXT,
+      client_quality TEXT,
       raw_data TEXT,
       last_analyzed_at TEXT,
       ignored_at TEXT,

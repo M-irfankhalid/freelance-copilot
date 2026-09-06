@@ -107,6 +107,12 @@ export const jobs = sqliteTable("jobs", {
   severity: text("severity"),
   status: text("status").notNull(),
   analysis: text("analysis"),
+  /**
+   * JSON of the client-trust snapshot (payment/deposit/email verification,
+   * account age, overall reputation, upgrade flags). Kept separate from
+   * rawData so quality gates and alerts never have to parse the full blob.
+   */
+  clientQuality: text("client_quality"),
   /** Raw JSON of the full Freelancer.com API project response. */
   rawData: text("raw_data"),
   lastAnalyzedAt: text("last_analyzed_at"),
@@ -238,7 +244,7 @@ export const discordSettings = sqliteTable("discord_settings", {
   webhookCipherText: text("webhook_cipher_text"),
   webhookIv: text("webhook_iv"),
   webhookAuthTag: text("webhook_auth_tag"),
-  /** JSON array of enabled events: match | bid_placed | bid_failed | api_error. */
+  /** JSON array of enabled events: match | needs_review | bid_placed | bid_failed | api_error. */
   events: text("events").notNull().default("[]"),
   updatedAt: text("updated_at").notNull(),
 });

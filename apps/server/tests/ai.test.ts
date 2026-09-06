@@ -419,10 +419,8 @@ describe("analyzeJob integration", () => {
                 {
                   message: {
                     content: JSON.stringify({
-                      relevant: true,
                       score: 72,
-                      reasons: ["React.js is one of your strong skills", "Charts match your dashboard experience"],
-                      summary: "Matches your React skills.",
+                      reason: "Matches your React and Node.js dashboard skills.",
                     }),
                   },
                 },

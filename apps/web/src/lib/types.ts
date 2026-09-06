@@ -318,7 +318,12 @@ export interface AutomationRun {
 /* -------------------------------- Discord -------------------------------- */
 
 /** Events the worker can push to a Discord channel. */
-export type DiscordEvent = "match" | "bid_placed" | "bid_failed" | "api_error";
+export type DiscordEvent =
+  | "match"
+  | "needs_review"
+  | "bid_placed"
+  | "bid_failed"
+  | "api_error";
 
 /** Discord config as returned by the API — never contains the webhook URL. */
 export interface DiscordSettings {

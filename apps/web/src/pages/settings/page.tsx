@@ -186,6 +186,7 @@ export default function SettingsPage() {
 
 const EVENT_OPTIONS: Array<{ id: DiscordEvent; label: string; hint: string }> = [
   { id: "match", label: "New qualifying match", hint: "A job clears your match threshold" },
+  { id: "needs_review", label: "Needs your review", hint: "Risky client or NDA/IP job sent for manual handling" },
   { id: "bid_placed", label: "Auto-bid placed", hint: "The worker placed a bid for you" },
   { id: "bid_failed", label: "Auto-bid failed", hint: "A bid errored and won't be retried" },
   { id: "api_error", label: "API issue", hint: "Credential or pipeline failures" },

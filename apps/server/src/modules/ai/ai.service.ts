@@ -105,17 +105,34 @@ export interface AnalysisResult {
   competitorNote: string;
 }
 
-/** Fast relevance gate (Model A). The score becomes the job's match score. */
+/**
+ * Fast relevance gate (Model A). Kept intentionally small — output tokens cost
+ * money on every analyzed job, so the model returns only a score and one short
+ * reason. The score already folds in client trustworthiness (see the prompt
+ * rubric); everything else is derived deterministically in code.
+ */
 export interface RelevancyCheck {
-  relevant: boolean;
-  /** 0–100 match strength. */
+  /** 0–100: relevance combined with client trust. */
   score: number;
-  reasons: string[];
-  /** One short paragraph explaining the decision. */
-  summary: string;
+  /** One short sentence explaining the deciding factor. */
+  reason: string;
 }
 
-/** Inputs the relevance model sees: title, description, user summary, instructions. */
+/** Client trust + project signals the relevance model should weigh. */
+export interface RelevancyClientData {
+  country?: string | null;
+  paymentVerified: boolean | null;
+  emailVerified: boolean | null;
+  depositMade: boolean | null;
+  /** Human label, e.g. "account is established (registered ~14 years ago)". */
+  accountAgeLabel?: string;
+  /** Human label, e.g. "5.0/5 from 10 ratings" or "no public rating history". */
+  reputationLabel?: string;
+  /** Human names of upgrades present, e.g. ["Recruiter", "NDA"]. */
+  upgrades?: string[];
+}
+
+/** Inputs the relevance model sees: title, description, user summary, trust data. */
 export interface RelevancyPromptData {
   jobTitle: string;
   jobDescription: string[];
@@ -123,6 +140,13 @@ export interface RelevancyPromptData {
   userSummary?: string | null;
   /** Free-text relevancy instructions, e.g. "no web3 or WordPress". */
   relevancyInstructions?: string | null;
+  /** Client trust signals, if known. */
+  client?: RelevancyClientData | null;
+  /** Pre-formatted budget label, e.g. "$100 – $500". */
+  budgetLabel?: string | null;
+  /** Project billing type: "fixed" | "hourly". */
+  projectType?: string | null;
+  bidCount?: number;
 }
 
 /** Data needed to generate a proposal via AI. */
@@ -459,14 +483,6 @@ export function validateRelevancyOutput(rawText: string): RelevancyCheck {
 
   const obj = parsed as Record<string, unknown>;
 
-  if (typeof obj["relevant"] !== "boolean") {
-    throw new AppError(
-      500,
-      "INTERNAL",
-      `AI relevance verdict is invalid: expected boolean, got ${JSON.stringify(obj["relevant"])}`
-    );
-  }
-
   const score = Number(obj["score"]);
   if (isNaN(score) || score < 0 || score > 100) {
     throw new AppError(
@@ -476,25 +492,58 @@ export function validateRelevancyOutput(rawText: string): RelevancyCheck {
     );
   }
 
-  const reasons = Array.isArray(obj["reasons"])
-    ? obj["reasons"].filter((r) => typeof r === "string" && r.trim().length > 0)
-    : [];
+  const reason = typeof obj["reason"] === "string" ? obj["reason"].trim() : "";
+  if (reason.length === 0) {
+    throw new AppError(
+      500,
+      "INTERNAL",
+      "AI relevance output is missing its one-line reason"
+    );
+  }
 
-  const summary = typeof obj["summary"] === "string" ? obj["summary"].trim() : "";
-
-  return { relevant: obj["relevant"], score, reasons, summary };
+  return { score, reason };
 }
 
 /**
- * Build the fast relevance prompt. Only the job title, description, the user's
- * verified summary, and their relevancy instructions reach the model — this is
- * the cheap gate that runs before any expensive work.
+ * Build the fast relevance prompt. The model sees the job plus the client's
+ * verified trust signals and project context, and returns ONE score (job
+ * relevance folded together with client trustworthiness) plus a short reason.
+ * Output tokens are the main cost of this call, so the answer is kept to a
+ * single line.
  */
 export function buildRelevancyPrompt(data: RelevancyPromptData): string {
   const userSummary = data.userSummary?.trim() || "No user summary provided.";
   const instructions = data.relevancyInstructions?.trim() || "None.";
+
+  const client = data.client;
+  let clientBlock = "Not available.";
+  if (client) {
+    const yesNo = (v: boolean | null): string =>
+      v === true ? "Yes" : v === false ? "No" : "Unknown";
+    clientBlock = [
+      client.country ? `Country: ${client.country}` : null,
+      `Payment method verified: ${yesNo(client.paymentVerified)}`,
+      `Email verified: ${yesNo(client.emailVerified)}`,
+      `Deposit made (escrow history): ${yesNo(client.depositMade)}`,
+      client.accountAgeLabel ? `Account: ${client.accountAgeLabel}` : null,
+      client.reputationLabel ? `Reputation: ${client.reputationLabel}` : null,
+    ]
+      .filter((l): l is string => l !== null)
+      .join("\n");
+  }
+
+  const upgrades = client?.upgrades?.length ? client.upgrades.join(", ") : "none";
+  const projectBlock = [
+    data.budgetLabel ? `Budget: ${data.budgetLabel}` : null,
+    data.projectType ? `Type: ${data.projectType}` : null,
+    data.bidCount !== undefined ? `Bids: ${data.bidCount}` : null,
+    `Upgrades: ${upgrades}`,
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
+
   return `
-You are a fast, low-cost relevance screener for a freelance agent. Decide whether the job below is worth a freelancer's time given their summary and instructions.
+You are a fast, low-cost job screener for a freelance agent. Decide whether the job is worth the freelancer's time AND whether the client is trustworthy enough to auto-bid on. Use ONLY the facts below. Never invent facts about the user or the client.
 
 === USER SUMMARY ===
 ${userSummary}
@@ -508,13 +557,23 @@ ${data.jobTitle}
 === JOB DESCRIPTION ===
 ${data.jobDescription.join("\n")}
 
-Return ONLY a JSON object with exactly these keys:
-- relevant: boolean (true if the job matches, false otherwise)
-- score: number (0-100, how strong the match is)
-- reasons: array of strings (why it does or does not match)
-- summary: string (one short paragraph)
+=== CLIENT (VERIFIED SIGNALS) ===
+${clientBlock}
 
-Judge strictly using ONLY the job details and user facts above. Never invent facts about the user. A short description is not a reason to reject a job.
+=== PROJECT SIGNALS ===
+${projectBlock}
+
+=== SCORING RULES ===
+Return ONE score (0-100) plus a one-sentence reason. A score of 80+ makes the job auto-bid eligible, so trust problems must pull the score down:
+- Client payment verified AND a strong match => 80+, EVEN IF the account is new.
+- Payment unverified but the project carries real paid signals (Recruiter, NDA, IP contract upgrades) => 60-79: worth a human look, NEVER auto-bid.
+- New account with unverified payment and no deposit => below 60: too risky.
+- Old account with no payment verification and no upgrades is still risky — keep it below the auto-bid range.
+- Account age is only ONE factor combined with the others, never a hard rule by itself.
+- NDA / IP-contract projects are never auto-bid regardless of score (they need a signature); score them anyway for manual review.
+- A short description is not a reason to reject a job.
+
+Return ONLY JSON: {"score": number 0-100, "reason": "one short sentence (under 25 words) naming the deciding factor"}
 `.trim();
 }
 
@@ -527,17 +586,17 @@ export async function checkRelevancyWithAI(
   data: RelevancyPromptData
 ): Promise<RelevancyCheck> {
   const systemPrompt =
-    "You are a fast, low-cost job relevance screener. Decide whether the job matches the user using ONLY the job details and the user's own summary/instructions. Never invent facts about the user.";
+    "You are a fast, low-cost job screener. Score whether the job is worth pursuing for the freelancer, combining how well it matches with how trustworthy the client is. Use ONLY the facts provided. Never invent facts about the user or the client.";
   const rawResponse = await callOpenRouter(
     systemPrompt,
     buildRelevancyPrompt(data),
     readAnalysisModel() ?? undefined
   );
   const result = validateRelevancyOutput(rawResponse);
-  log.info(
-    `Relevance gate: relevant=${result.relevant}, score=${result.score}`,
-    { jobTitle: data.jobTitle }
-  );
+  log.info(`Relevance gate: score=${result.score}`, {
+    jobTitle: data.jobTitle,
+    reason: result.reason,
+  });
   return result;
 }
 
