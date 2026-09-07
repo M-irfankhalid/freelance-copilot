@@ -69,7 +69,6 @@ Experience: ${experienceText}
 Portfolio: ${portfolioText}
 Wants: ${profile.wants.join("; ") || "None specified"}
 Not-wants: ${profile.notWants.join("; ") || "None specified"}
-Custom instructions: ${profile.customInstructions || "None"}
 ${reputationLine}
 ===
 Write a concise 3-4 paragraph professional summary that captures:

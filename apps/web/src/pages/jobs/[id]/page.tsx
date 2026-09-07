@@ -118,8 +118,12 @@ export default function JobDetailPage() {
     setAnalyzing(true);
     setAnalyzeError(null);
     try {
+      // AI analysis runs up to ~120s server-side — well past the default 10s
+      // client timeout. Without this override the request aborts early and the
+      // UI shows "Cannot reach the server" while the analysis still finishes.
       await api<AnalysisResponse>(`/api/jobs/${projectId}/analyze`, {
         method: "POST",
+        timeoutMs: 150_000,
       });
       refetch();
     } catch (cause) {
@@ -154,6 +158,9 @@ export default function JobDetailPage() {
           `/api/proposals/${proposalId}/regenerate`,
           {
             method: "POST",
+            // Generation can take ~180s server-side; wait for it instead of
+            // aborting at the default 10s and erroring while the AI finishes.
+            timeoutMs: 200_000,
             body: {
               projectType: job.projectType,
               bidPeriod: job.bidPeriod,
@@ -168,6 +175,9 @@ export default function JobDetailPage() {
           proposal: { id: string; content: string; competitorNote?: string };
         }>(`/api/proposals/generate`, {
           method: "POST",
+          // Generation can take ~180s server-side; wait for it instead of
+          // aborting at the default 10s and erroring while the AI finishes.
+          timeoutMs: 200_000,
           body: {
             jobId: `job-${projectId}`,
             projectId,
@@ -468,7 +478,7 @@ export default function JobDetailPage() {
                   <Label htmlFor="proposal-text" className="text-xs font-medium">Proposal text</Label>
                   <Textarea
                     id="proposal-text"
-                    rows={6}
+                    rows={15}
                     placeholder="Write your proposal here, or click 'Generate with AI' below..."
                     className="resize-none text-sm leading-relaxed"
                     value={proposalText}

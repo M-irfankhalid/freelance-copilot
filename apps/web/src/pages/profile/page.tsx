@@ -227,6 +227,9 @@ export default function ProfilePage() {
     try {
       const result = await api<{ summary: string }>("/api/ai/summary", {
         method: "POST",
+        // Generation can take ~120s server-side; wait for it instead of
+        // aborting at the default 10s and reporting a network error.
+        timeoutMs: 150_000,
         body: {},
       });
       // Load the saved summary back into the form so the box updates
@@ -729,15 +732,17 @@ export default function ProfilePage() {
 
       <Card className="border-primary/25 bg-primary/[0.03] ring-primary/15">
         <CardHeader>
-          <CardTitle>Custom AI instructions</CardTitle>
+          <CardTitle>Proposal instructions</CardTitle>
           <CardDescription>
-            Standing orders the agent follows in every analysis and proposal.
+            Standing orders for AI proposal writing. The agent follows these only
+            when generating a proposal, alongside your portfolio summary and
+            proposal templates.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <Textarea
-            id="custom-instructions"
-            aria-label="Custom AI instructions"
+            id="proposal-instructions"
+            aria-label="Proposal instructions"
             rows={5}
             value={form.customInstructions || ""}
             onChange={(event) => set("customInstructions", event.target.value)}
@@ -745,8 +750,9 @@ export default function ProfilePage() {
           />
           <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
             <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            Instructions shape style and structure, but can never override the truth
-            rule: no invented skills, experience, or history.
+            Tell the writer how to pitch you — tone, structure, and what you will or
+            won't offer (pricing, timeline, delivery). These can never override the
+            truth rule: no invented skills, experience, or history.
           </p>
         </CardContent>
         <CardFooter className="justify-end">

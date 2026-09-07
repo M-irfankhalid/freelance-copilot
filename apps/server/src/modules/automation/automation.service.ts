@@ -273,6 +273,47 @@ export async function saveSettings(
   }
 }
 
+/**
+ * Reset today's auto-bid usage counter so the worker can keep bidding the same
+ * day. Zeroes `bidsToday` and re-anchors `capDate` to today, mirroring what
+ * `checkAndResetDailyCap` does when the calendar date rolls over — so the next
+ * `runAutoBidCheck` treats the day as fresh instead of blocked at the cap.
+ */
+export async function resetDailyUsage(userId: string): Promise<AutomationSettings> {
+  try {
+    const current = await getOrCreateSettings(userId);
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+
+    getDb()
+      .update(automationSettingsTable)
+      .set({ bidsToday: 0, capDate: today, updatedAt: now })
+      .where(eq(automationSettingsTable.userId, userId))
+      .run();
+
+    log.info(
+      `Reset daily bid usage for user ${userId} (was ${current.bidsToday}/${current.dailyCap})`
+    );
+    await logRun(
+      userId,
+      "Quota reset",
+      `Daily bid usage reset to 0/${current.dailyCap} for today`,
+      "ok"
+    );
+
+    return getOrCreateSettings(userId);
+  } catch (error) {
+    log.error("Failed to reset daily bid usage:", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    throw new AppError(
+      500,
+      "DATABASE_ERROR",
+      `Failed to reset daily bid usage: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
+}
+
 export async function listRuns(userId: string, limit = 50): Promise<AutomationRunResponse[]> {
   try {
     const rows = getDb()

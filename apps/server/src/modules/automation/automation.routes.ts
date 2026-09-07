@@ -10,6 +10,7 @@ import {
   runAutoBidCheck,
   runPipeline,
   setPaused,
+  resetDailyUsage,
 } from "./automation.service.js";
 
 export const automationRouter = Router();
@@ -70,6 +71,17 @@ automationRouter.post("/pause", async (req, res, next) => {
 
     await setPaused(req.user!.id, input.paused);
     res.json({ ok: true, paused: input.paused });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** POST /api/automation/reset-daily-usage — zero today's bid counter so the
+ *  worker can auto-bid again the same day. */
+automationRouter.post("/reset-daily-usage", async (req, res, next) => {
+  try {
+    const settings = await resetDailyUsage(req.user!.id);
+    res.json({ settings });
   } catch (error) {
     next(error);
   }

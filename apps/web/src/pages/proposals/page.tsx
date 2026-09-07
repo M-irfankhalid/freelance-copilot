@@ -100,6 +100,9 @@ export default function ProposalsPage() {
     try {
       await api<{ ok: true }>(`/api/proposals/${proposal.id}/regenerate`, {
         method: "POST",
+        // Generation can take ~180s server-side; wait for it instead of
+        // aborting at the default 10s and erroring while the AI finishes.
+        timeoutMs: 200_000,
         body: {},
       });
       if (editing?.id === proposal.id) {

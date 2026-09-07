@@ -208,7 +208,7 @@ export function buildProposalPrompt(data: ProposalPromptData): string {
     ? p.portfolio.map((item) => `  • "${item.title}"${item.description ? ` — ${item.description}` : ""}${item.url ? ` (${item.url})` : ""}`).join("\n")
     : "  (No portfolio items on file)";
   const certsText = p.certifications.length ? p.certifications.join(", ") : "None listed";
-  const customInstr = p.customInstructions || "None";
+  const customInstr = p.customInstructions?.trim() || "No proposal instructions set.";
   const portfolioSummaryText = p.portfolioSummary?.trim() || "No portfolio summary provided.";
   const templatesText = p.proposalTemplates?.trim() || "No proposal templates provided.";
 
@@ -254,10 +254,12 @@ ${experienceLines}
 Portfolio:
 ${portfolioLines}
 Certifications: ${certsText}
-Custom instructions: ${customInstr}
 ${p.userSummary ? `Profile summary: ${p.userSummary}` : ""}
 Portfolio summary:
 ${portfolioSummaryText}
+
+=== YOUR PROPOSAL INSTRUCTIONS (follow these for tone, content, pricing, and commitments) ===
+${customInstr}
 
 === PROPOSAL TEMPLATES (reference these for tone and structure) ===
 ${templatesText}
@@ -276,14 +278,13 @@ ${analysisBlock}
 ${data.jobDescription.join("\n")}
 
 === INSTRUCTION ===
-Write a proposal cover message (2–3 paragraphs) that:
-1. Addresses the client by name ("Hi,") and shows you read their project description
+Write a proposal cover message that:
+1. Shows the client you read their project description
 2. Highlights 1–2 matching skills from YOUR profile that directly address their needs
 3. References a specific relevant experience or portfolio item from your profile (if any exist)
-4. Mentions that price and duration can be discussed later, offering the best price with quality work and fast delivery — do NOT commit to a specific rate or delivery date
-5. Incorporates your custom instructions (if any)
-6. Matches the tone and structure of the proposal templates provided (if any)
-7. Stays grounded in the facts above — do NOT invent new skills, projects, or client history
+4. Follows YOUR PROPOSAL INSTRUCTIONS above — including what you say about pricing, timeline, delivery, and any offers or commitments
+5. Matches the tone and structure of the proposal templates provided (if any)
+6. Stays grounded in the facts above — never invent skills, experience, portfolio items, certifications, previous work, or client history
 
 Return ONLY the proposal text. Do not include headings, code blocks, or meta-commentary. Write it as the freelancer would send it on Freelancer.com.
 `.trim();

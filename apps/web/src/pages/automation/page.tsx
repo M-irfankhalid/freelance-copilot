@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Pause, Play, TriangleAlert, Zap } from "lucide-react";
+import { Bot, Pause, Play, RefreshCw, TriangleAlert, Zap } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
@@ -207,6 +207,28 @@ export default function AutomationPage() {
     }
   };
 
+  const [resettingUsage, setResettingUsage] = useState(false);
+
+  const resetDailyUsage = async () => {
+    setActionError(null);
+    setResettingUsage(true);
+    try {
+      await api<{ settings: BackendSettings }>(
+        "/api/automation/reset-daily-usage",
+        { method: "POST" }
+      );
+      // Clear any pending draft so the counter we just zeroed isn't overwritten
+      // by a stale debounced save, then pull fresh settings + run log.
+      setDraft({});
+      refetch();
+      refetchRuns();
+    } catch (cause) {
+      setActionError(messageFor(cause));
+    } finally {
+      setResettingUsage(false);
+    }
+  };
+
   const capUsed = settings ? Math.min((settings.bidsToday / settings.dailyCap) * 100, 100) : 0;
 
   if (isLoading && !settings) {
@@ -366,11 +388,26 @@ export default function AutomationPage() {
 
           <CardContent className="flex flex-col gap-4">
             <div className="rounded-lg border bg-muted/40 p-3">
-              <div className="mb-1.5 flex justify-between text-sm">
+              <div className="mb-1.5 flex items-center justify-between gap-2 text-sm">
                 <span>Daily usage</span>
-                <span className="font-medium tabular-nums">
-                  {settings.bidsToday} / {settings.dailyCap} bids today
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium tabular-nums">
+                    {settings.bidsToday} / {settings.dailyCap} bids today
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={resetDailyUsage}
+                    disabled={resettingUsage || settings.bidsToday === 0}
+                    aria-label="Reset today's bid count"
+                  >
+                    <RefreshCw
+                      data-icon="inline-start"
+                      className={cn(resettingUsage && "animate-spin")}
+                    />
+                    Reset
+                  </Button>
+                </div>
               </div>
               <Progress
                 value={capUsed}
@@ -379,6 +416,7 @@ export default function AutomationPage() {
               />
               <p className="mt-1.5 text-xs text-muted-foreground">
                 Worker pauses auto-bidding when the cap is reached; resumes tomorrow.
+                Reset the counter to keep bidding the same day.
               </p>
             </div>
 

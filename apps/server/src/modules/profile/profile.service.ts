@@ -49,12 +49,12 @@ export const profileSchema = z.object({
   notWants: z.array(z.string().min(1).max(60)).max(30),
   /** Country names/codes whose jobs are excluded before any analysis. */
   ignoredCountries: z.array(z.string().min(1).max(60)).max(50),
-  customInstructions: z.string().max(5_000).nullable(),
+  customInstructions: z.string().max(20_000).nullable(),
   userSummary: z.string().max(10_000).nullable().optional(),
   /** Free-text guidance for the relevance model, e.g. "no web3 projects". */
-  relevancyInstructions: z.string().max(5_000).nullable().optional(),
+  relevancyInstructions: z.string().max(20_000).nullable().optional(),
   /** Markdown summary of portfolio projects, used during proposal generation. */
-  portfolioSummary: z.string().max(20_000).nullable().optional(),
+  portfolioSummary: z.string().max(40_000).nullable().optional(),
   /** Markdown block holding all proposal templates, used during proposal generation. */
   proposalTemplates: z.string().max(40_000).nullable().optional(),
 });
