@@ -3,6 +3,7 @@ import {
   Briefcase,
   FileText,
   Gavel,
+  Info,
   LayoutDashboard,
   PlugZap,
   ScrollText,
@@ -53,6 +54,7 @@ export const navSecondaryItems: NavItem[] = [
   { title: "Automation", url: "/automation", icon: Bot },
   { title: "Profile", url: "/profile", icon: UserRound },
   { title: "Settings", url: "/settings", icon: Settings },
+  { title: "About", url: "/about", icon: Info },
 ];
 
 /** All navigable sections flattened — used to resolve breadcrumbs. */

@@ -12,6 +12,7 @@ import { DashboardErrorBoundary } from "@/pages/dashboard/error";
 import { DashboardLoading } from "@/pages/dashboard/loading";
 import { PlatformsErrorBoundary } from "@/pages/platforms/error";
 import { RouteErrorBoundary } from "@/components/shared/error-boundary";
+import AboutPage from "@/pages/about/page";
 import AnalyticsPage from "@/pages/analytics/page";
 import AutomationPage from "@/pages/automation/page";
 import BidsPage from "@/pages/bids/page";
@@ -76,6 +77,7 @@ const router = createBrowserRouter([
       { path: "automation", element: <AutomationPage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "about", element: <AboutPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },
