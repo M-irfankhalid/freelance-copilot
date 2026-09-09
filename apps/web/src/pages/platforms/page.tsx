@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleCheck, CircleX, KeyRound, Lock, PlugZap, RefreshCw } from "lucide-react";
+import { CircleCheck, CircleX, Info, KeyRound, Lock, PlugZap, RefreshCw } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { DiscordCard } from "@/components/discord/discord-card";
@@ -253,7 +253,8 @@ export default function PlatformsPage() {
                           relevance, a strong one writes proposals.
                         </p>
                         <ModelSelector
-                          label="Relevance model (fast)"
+                          label="Relevance model"
+                          hint="Must support structured JSON output (response_format): screening and analysis ask this model for a strict JSON schema, and models without it fail relevance checks."
                           current={credential.analysisModelId}
                           options={models.data?.models ?? []}
                           onPick={(modelId) =>
@@ -261,7 +262,7 @@ export default function PlatformsPage() {
                           }
                         />
                         <ModelSelector
-                          label="Proposal model (strong)"
+                          label="Proposal model"
                           current={credential.proposalModelId}
                           options={models.data?.models ?? []}
                           onPick={(modelId) =>
@@ -409,20 +410,25 @@ function StatusBadge({
 }
 
 function ModelSelector({
+  label,
   current,
   options,
   onPick,
+  hint,
 }: {
+  label: string;
   current: string | null;
   options: AiModelOption[];
   onPick: (modelId: string) => void;
+  hint?: string;
 }) {
+  const fieldId = `model-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor="model">AI model</Label>
+      <Label htmlFor={fieldId}>{label}</Label>
       {options.length > 0 ? (
         <Select value={current ?? undefined} onValueChange={onPick}>
-          <SelectTrigger id="model" className="w-full" aria-label="AI model">
+          <SelectTrigger id={fieldId} className="w-full" aria-label={label}>
             <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
@@ -437,6 +443,12 @@ function ModelSelector({
       ) : (
         <p className="text-xs text-muted-foreground">Loading model catalogue…</p>
       )}
+      {hint !== undefined ? (
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }
