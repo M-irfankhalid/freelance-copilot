@@ -46,8 +46,6 @@ Drizzle ORM
 Other:
 
 Zod
-Docker
-Docker Compose
 pnpm
 
 Do not introduce microservices unless explicitly required.

@@ -35,6 +35,7 @@ pnpm-debug.log*
 
 # Claude settings (user-local, never commit)
 .claude/settings.local.json
+.claude/launch.json
 
 # OS / editor
 .DS_Store

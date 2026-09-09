@@ -5,7 +5,7 @@
     "dev": "concurrently \"pnpm --filter web dev\" \"pnpm --filter server dev\"",
     "test": "pnpm -r run test"
   },
-  "license": "ISC",
+  "license": "MIT",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",

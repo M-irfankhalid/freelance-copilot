@@ -35,17 +35,25 @@ Credentials are stored securely on the user's own server.
 • SQLite
 • Drizzle
 • OpenRouter
-• Docker
 
 ## Development
 
 Requirements:
 
-• Node.js
+• Node.js 20+
 • pnpm
-• Docker
 
-Install dependencies:
+Install dependencies and run locally:
 
 ```bash
 pnpm install
+pnpm dev
+```
+
+The API serves on `http://localhost:4000` and the web app on `http://localhost:5173`.
+
+> Docker packaging is planned but not yet shipped.
+
+## License
+
+Released under the [MIT License](LICENSE).
