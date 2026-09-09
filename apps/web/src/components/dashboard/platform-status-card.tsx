@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Globe,
+  MessageSquare,
   Plus,
   TriangleAlert,
 } from "lucide-react";
@@ -52,7 +53,11 @@ export function PlatformStatusCard({
                 className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
               >
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/40">
-                  <Globe className="size-4 text-muted-foreground" aria-hidden />
+                  {platform.id === "discord" ? (
+                    <MessageSquare className="size-4 text-muted-foreground" aria-hidden />
+                  ) : (
+                    <Globe className="size-4 text-muted-foreground" aria-hidden />
+                  )}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{platform.name}</p>

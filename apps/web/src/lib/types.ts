@@ -464,7 +464,7 @@ export interface DashboardSnapshot {
 
 /** Lightweight per-platform line used on the dashboard status card. */
 export interface PlatformConnection {
-  id: PlatformId;
+  id: PlatformId | "discord";
   name: string;
   username?: string;
   status: ConnectionStatus;

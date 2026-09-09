@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CircleCheck, CircleX, KeyRound, Lock, PlugZap, RefreshCw } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
+import { DiscordCard } from "@/components/discord/discord-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -307,6 +308,8 @@ export default function PlatformsPage() {
           );
         })}
       </div>
+
+      <DiscordCard />
 
       <p className="flex items-start gap-2 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
         <Lock className="mt-0.5 size-4 shrink-0" aria-hidden />

@@ -13,6 +13,7 @@ import { AppError } from "../../lib/errors.js";
 import { createLogger } from "../../lib/logger.js";
 import { getProfile } from "../profile/profile.service.js";
 import { parseStoredAnalysis } from "../jobs/jobs.service.js";
+import { getDiscordSettings } from "../discord/discord.service.js";
 
 const log = createLogger("system");
 
@@ -91,7 +92,7 @@ export interface BidSummary {
 }
 
 export interface PlatformConnection {
-  id: "freelancer" | "openrouter";
+  id: "freelancer" | "openrouter" | "discord";
   name: string;
   username?: string;
   status: ConnectionStatus;
@@ -462,6 +463,11 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       .get();
     const orModel = orCred !== undefined ? parseMeta(orCred.meta).modelId : undefined;
 
+    const discordSettings = getDiscordSettings(userId);
+    const discordStatus: ConnectionStatus = discordSettings.configured
+      ? "connected"
+      : "not_connected";
+
     const platforms: PlatformConnection[] = [
       {
         id: "freelancer",
@@ -486,6 +492,16 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
             : orModel !== undefined
               ? `Model: ${orModel}`
               : undefined,
+      },
+      {
+        id: "discord",
+        name: "Discord",
+        status: discordStatus,
+        note: discordSettings.configured
+          ? discordSettings.webhookPreview !== null
+            ? `Webhook ${discordSettings.webhookPreview}`
+            : "Notifications connected"
+          : "Connect Discord for job notifications",
       },
     ];
 
