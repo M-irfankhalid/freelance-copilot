@@ -1,4 +1,4 @@
-# Freelancer Agent
+# Freelance Copilot
 
 **A self-hosted AI agent that finds relevant projects on Freelancer.com and
 drafts quality proposals for you — so you can focus on your work while the

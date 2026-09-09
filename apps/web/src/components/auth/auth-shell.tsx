@@ -26,7 +26,7 @@ export function AuthShell({
         <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
           <Bot className="size-4.5" aria-hidden />
         </span>
-        Freelancer Agent
+        Freelance Copilot
       </Link>
 
       <div className="w-full max-w-sm rounded-xl border bg-card p-6 shadow-sm">

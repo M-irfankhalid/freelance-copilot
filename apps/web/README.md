@@ -1,6 +1,6 @@
 # Web App
 
-React 19 + Vite + TypeScript frontend for Freelancer Agent.
+React 19 + Vite + TypeScript frontend for Freelance Copilot.
 
 - `pnpm dev` — dev server on :5173, `/api` proxied to the Express server on :4000
 - `pnpm build` — typecheck + production build

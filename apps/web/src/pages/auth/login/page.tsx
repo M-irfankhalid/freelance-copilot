@@ -98,7 +98,7 @@ export default function LoginPage() {
     <>
       <AuthShell
         title="Welcome back"
-        description="Log in to your Freelancer Agent workspace."
+        description="Log in to your Freelance Copilot workspace."
         footer={
           <>
             New here?{" "}

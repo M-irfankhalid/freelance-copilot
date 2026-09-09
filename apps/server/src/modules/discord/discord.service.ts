@@ -239,7 +239,7 @@ export async function sendTestMessage(userId: string): Promise<void> {
   try {
     await postToWebhook(
       webhookUrl,
-      "✅ Freelancer Agent — Discord notifications connected."
+      "✅ Freelance Copilot — Discord notifications connected."
     );
   } catch (error) {
     throw new AppError(

@@ -1,8 +1,8 @@
-# Freelancer Agent
+# Freelance Copilot
 
 ## Project
 
-Freelancer Agent is a self hosted, open source AI agent for individual freelancers using Freelancer.com.
+Freelance Copilot is a self hosted, open source AI agent for individual freelancers using Freelancer.com.
 
 The application helps the user:
 

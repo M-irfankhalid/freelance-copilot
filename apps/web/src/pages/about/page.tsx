@@ -37,7 +37,7 @@ export default function AboutPage() {
     <div className="flex flex-col gap-4 md:gap-6">
       <PageHeader
         title="About"
-        description="What Freelancer Agent is, how it keeps you in control, and who's behind it."
+        description="What Freelance Copilot is, how it keeps you in control, and who's behind it."
       />
 
       <Card size="sm">
@@ -49,7 +49,7 @@ export default function AboutPage() {
             <div className="flex flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-heading text-lg leading-none font-semibold">
-                  Freelancer Agent
+                  Freelance Copilot
                 </span>
                 <Badge variant="outline">v{APP_VERSION}</Badge>
               </div>
@@ -61,7 +61,7 @@ export default function AboutPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <p className="text-sm leading-relaxed">
-            Freelancer Agent finds relevant projects on Freelancer.com, matches them
+            Freelance Copilot finds relevant projects on Freelancer.com, matches them
             against your real profile, and drafts quality proposals — so you can focus
             on your work while the agent handles discovery. Every proposal is grounded
             in facts you have verified, and nothing is submitted without your say-so.
@@ -116,7 +116,7 @@ export default function AboutPage() {
         </CardHeader>
         <CardContent>
           <p className="text-sm leading-relaxed text-card-foreground/90">
-            Do not use Freelancer Agent to spam Freelancer.com or to send mass,
+            Do not use Freelance Copilot to spam Freelancer.com or to send mass,
             unsolicited, or low-quality bids. It is built for good-faith use only:
             bidding on projects that genuinely match your profile. The whole point is to
             help real freelancers spend less time hunting and more time delivering — not
@@ -160,7 +160,7 @@ export default function AboutPage() {
             Released under the MIT License. © 2026 Muhammad Irfan Khalid.
           </span>
           <span className="text-xs text-muted-foreground/80">
-            Freelancer Agent is an independent project and is not affiliated with,
+            Freelance Copilot is an independent project and is not affiliated with,
             endorsed by, or sponsored by Freelancer.com.
           </span>
         </CardFooter>

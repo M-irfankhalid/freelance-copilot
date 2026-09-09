@@ -15,7 +15,7 @@ export function BrandMark() {
             <Bot className="size-4" aria-hidden />
           </span>
           <div className="grid flex-1 text-left leading-tight">
-            <span className="truncate font-semibold">Freelancer Agent</span>
+            <span className="truncate font-semibold">Freelance Copilot</span>
             <span className="truncate text-xs text-sidebar-foreground/70">
               Personal workspace
             </span>

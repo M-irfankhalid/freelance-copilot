@@ -506,8 +506,8 @@ export async function callOpenRouter(
     headers: {
       Authorization: `Bearer ${plaintextKey}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": "https://freelancer-agent.local",
-      "X-Title": "Freelancer Agent",
+      "HTTP-Referer": "https://freelance-copilot.local",
+      "X-Title": "Freelance Copilot",
     },
     body: JSON.stringify({
       model,

@@ -1,5 +1,5 @@
 {
-  "name": "freelancer-agent",
+  "name": "freelance-copilot",
   "version": "1.0.0",
   "scripts": {
     "dev": "concurrently \"pnpm --filter web dev\" \"pnpm --filter server dev\"",

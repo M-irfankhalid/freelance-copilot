@@ -2,7 +2,7 @@
 
 ## Product
 
-Freelancer Agent
+Freelance Copilot
 
 ## Description
 

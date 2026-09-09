@@ -872,7 +872,7 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
     void sendDiscordEvent(
       userId,
       "api_error",
-      `🚨 Freelancer Agent hit an API issue: credentials invalid — ${
+      `🚨 Freelance Copilot hit an API issue: credentials invalid — ${
         error instanceof Error ? error.message : "Unknown error"
       }. The worker paused itself.`
     );
@@ -1134,7 +1134,7 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
     void sendDiscordEvent(
       userId,
       "api_error",
-      `🚨 Freelancer Agent hit an API issue: ${
+      `🚨 Freelance Copilot hit an API issue: ${
         error instanceof Error ? error.message : "Unknown error"
       }.`
     );
