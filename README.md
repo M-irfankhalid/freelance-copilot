@@ -75,7 +75,7 @@ The API serves on `http://localhost:4000` and the web app on `http://localhost:5
 ## Maintainer
 
 Built and maintained by [Muhammad Irfan Khalid](https://irfankhalid.com),
-released as open source by [sofNxt.com](https://sofNxt.com).
+released as open source by [sofNxt](https://sofNxt.com).
 
 ## License
 
