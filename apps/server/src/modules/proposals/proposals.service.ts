@@ -381,6 +381,47 @@ export async function saveProposal(
   }
 }
 
+export async function deleteProposal(userId: string, proposalId: string): Promise<void> {
+  try {
+    const row = getDb()
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.id, proposalId), eq(proposals.userId, userId)))
+      .get();
+
+    if (!row) {
+      throw notFound(`Proposal ${proposalId} not found`);
+    }
+
+    // Only drafts may be removed outright. Anything approved or submitted is
+    // (or may be) referenced by a userBid — decline it instead if unwanted.
+    if (row.status !== "draft") {
+      throw new AppError(
+        400,
+        "BAD_REQUEST",
+        `Only draft proposals can be deleted (current status: ${row.status}). Decline it instead to keep it in your history.`
+      );
+    }
+
+    getDb()
+      .delete(proposals)
+      .where(and(eq(proposals.id, proposalId), eq(proposals.userId, userId)))
+      .run();
+
+    log.info(`Deleted draft proposal ${proposalId}`);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    log.error("Failed to delete proposal:", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    throw new AppError(
+      500,
+      "DATABASE_ERROR",
+      `Failed to delete proposal: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
+}
+
 /**
  * Generate proposal content using real profile facts and job details.
  * Never invents skills, experience, or portfolio items.

@@ -234,6 +234,11 @@ export interface JobSearchFilters {
   ignoredCountries?: string[];
   limit?: number;
   offset?: number;
+  /**
+   * Owning user. When present, ingest honors that user's pre-analysis toggles
+   * (reject >12h, reject ignored countries). Absent callers get the defaults.
+   */
+  userId?: string;
 }
 
 export interface JobSummary {

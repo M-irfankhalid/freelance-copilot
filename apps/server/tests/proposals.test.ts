@@ -484,6 +484,133 @@ describe("proposals", () => {
     }
   });
 
+  it("deletes a draft proposal", async () => {
+    stubFetchWithAI();
+    try {
+      const genRes = await realFetch(`${baseUrl}/api/proposals/generate`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-delete`,
+          projectId: PROJECT_ID,
+          jobTitle: "Delete test",
+          clientName: "Client",
+          description: ["Test"],
+          jobSkills: ["React.js"],
+          bidStats: { bidCount: 1 },
+          projectType: null,
+          bidPeriod: null,
+          upgrades: undefined,
+          competition: null,
+        }),
+      });
+      const { proposal } = (await genRes.json()) as { proposal: { id: string } };
+
+      const delRes = await realFetch(`${baseUrl}/api/proposals/${proposal.id}`, {
+        method: "DELETE",
+        headers: authed(),
+      });
+      expect(delRes.status).toBe(200);
+
+      // Gone from the list and from single-get.
+      const listRes = await realFetch(`${baseUrl}/api/proposals`, { headers: authed() });
+      const { proposals: list } = (await listRes.json()) as { proposals: Array<{ id: string }> };
+      expect(list.find((p) => p.id === proposal.id)).toBeUndefined();
+
+      const getRes = await realFetch(`${baseUrl}/api/proposals/${proposal.id}`, { headers: authed() });
+      expect(getRes.status).toBe(404);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses to delete a non-draft proposal", async () => {
+    stubFetchWithAI();
+    try {
+      const genRes = await realFetch(`${baseUrl}/api/proposals/generate`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-delete-approved`,
+          projectId: PROJECT_ID,
+          jobTitle: "Delete approved test",
+          clientName: "Client",
+          description: ["Test"],
+          jobSkills: ["React.js"],
+          bidStats: { bidCount: 1 },
+          projectType: null,
+          bidPeriod: null,
+          upgrades: undefined,
+          competition: null,
+        }),
+      });
+      const { proposal } = (await genRes.json()) as { proposal: { id: string } };
+
+      // Approve it first (as the bid flow does), then try to delete.
+      await realFetch(`${baseUrl}/api/proposals/${proposal.id}/status`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "approved" }),
+      });
+
+      const delRes = await realFetch(`${baseUrl}/api/proposals/${proposal.id}`, {
+        method: "DELETE",
+        headers: authed(),
+      });
+      expect(delRes.status).toBe(400);
+      const errBody = (await delRes.json()) as { error: { code: string } };
+      expect(errBody.error.code).toBe("BAD_REQUEST");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("returns 404 when deleting an unknown proposal", async () => {
+    const delRes = await realFetch(`${baseUrl}/api/proposals/nonexistent-id`, {
+      method: "DELETE",
+      headers: authed(),
+    });
+    expect(delRes.status).toBe(404);
+  });
+
+  it("declines a draft proposal", async () => {
+    stubFetchWithAI();
+    try {
+      const genRes = await realFetch(`${baseUrl}/api/proposals/generate`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-decline`,
+          projectId: PROJECT_ID,
+          jobTitle: "Decline test",
+          clientName: "Client",
+          description: ["Test"],
+          jobSkills: ["React.js"],
+          bidStats: { bidCount: 1 },
+          projectType: null,
+          bidPeriod: null,
+          upgrades: undefined,
+          competition: null,
+        }),
+      });
+      const { proposal } = (await genRes.json()) as { proposal: { id: string } };
+
+      const declineRes = await realFetch(`${baseUrl}/api/proposals/${proposal.id}/status`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "declined" }),
+      });
+      expect(declineRes.status).toBe(200);
+
+      const listRes = await realFetch(`${baseUrl}/api/proposals`, { headers: authed() });
+      const { proposals: list } = (await listRes.json()) as { proposals: Array<{ id: string; status: string }> };
+      const declined = list.find((p) => p.id === proposal.id);
+      expect(declined?.status).toBe("declined");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("requires authentication", async () => {
     const response = await realFetch(`${baseUrl}/api/proposals`);
     expect(response.status).toBe(401);

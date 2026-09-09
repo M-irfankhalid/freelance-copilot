@@ -39,6 +39,9 @@ automationRouter.put("/", async (req, res, next) => {
         minBid: z.number().int().positive().optional(),
         maxBid: z.number().int().positive().optional(),
         dailyCap: z.number().int().positive().max(100).optional(),
+        rejectStaleJobs: z.boolean().optional(),
+        rejectIgnoredCountries: z.boolean().optional(),
+        rejectBadReputation: z.boolean().optional(),
       }),
       req.body
     );

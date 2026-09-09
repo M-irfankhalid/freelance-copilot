@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Pause, Play, RefreshCw, TriangleAlert, Zap } from "lucide-react";
+import { Bot, Filter, Pause, Play, RefreshCw, TriangleAlert, Zap } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,9 @@ interface BackendSettings {
   bidsToday: number;
   capDate: string | null;
   paused: boolean;
+  rejectStaleJobs: boolean;
+  rejectIgnoredCountries: boolean;
+  rejectBadReputation: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,6 +75,9 @@ function normalizeSettings(s: BackendSettings): AutomationSettings {
     dailyCap: s.dailyCap,
     bidsToday: s.bidsToday,
     paused: s.paused,
+    rejectStaleJobs: s.rejectStaleJobs,
+    rejectIgnoredCountries: s.rejectIgnoredCountries,
+    rejectBadReputation: s.rejectBadReputation,
   };
 }
 
@@ -97,7 +103,7 @@ export default function AutomationPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Debounce timer for settings updates.
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Merge server settings with any local draft overrides.
   const serverSettings = settingsData?.settings;
@@ -146,6 +152,9 @@ export default function AutomationPage() {
           minBid: current.minBid,
           maxBid: current.maxBid,
           dailyCap: current.dailyCap,
+          rejectStaleJobs: current.rejectStaleJobs,
+          rejectIgnoredCountries: current.rejectIgnoredCountries,
+          rejectBadReputation: current.rejectBadReputation,
         },
       });
       // Clear local drafts since server now reflects the new state.
@@ -472,6 +481,54 @@ export default function AutomationPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Job screening rules */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Filter className="size-4 text-muted-foreground" aria-hidden />
+            Job screening rules
+          </CardTitle>
+          <CardDescription>
+            Jobs that fail a rule are rejected before the AI ever sees them — no
+            analysis cost, no storage. Turn a rule off and those jobs move on to
+            normal analysis.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col divide-y">
+          {(
+            [
+              [
+                "rejectStaleJobs",
+                "Reject jobs older than 12 hours",
+                "A job posted more than 12 hours ago can no longer be won competitively, so it is dropped before analysis.",
+              ],
+              [
+                "rejectIgnoredCountries",
+                "Reject jobs from excluded countries",
+                "Jobs whose client is in a country on your profile ignore list never reach analysis.",
+              ],
+              [
+                "rejectBadReputation",
+                "Reject brand-new, unverified clients",
+                "Drops jobs from accounts under 30 days old with no verified payment, no escrow deposit, and no project upgrades.",
+              ],
+            ] as const
+          ).map(([key, label, hint]) => (
+            <div key={key} className="flex items-center justify-between gap-4 py-3">
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor={`toggle-${key}`}>{label}</Label>
+                <p className="text-xs font-normal text-muted-foreground">{hint}</p>
+              </div>
+              <Switch
+                id={`toggle-${key}`}
+                checked={settings[key]}
+                onCheckedChange={(checked) => update(key, checked)}
+              />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       {/* Recent runs */}
       <Card size="sm">

@@ -13,6 +13,7 @@ import {
   getJobByUrl as getJobUrlService,
   analyzeJob as analyzeJobService,
   ignoreJob as ignoreJobService,
+  cleanStaleJobs,
   listMatches,
   listStoredJobs,
 } from "./jobs.service.js";
@@ -77,6 +78,7 @@ jobsRouter.get("/search", async (req, res, next) => {
       limit: Number.isFinite(limit) ? limit : undefined,
       offset: Number.isFinite(offset) ? offset : undefined,
       ignoredCountries: profile?.ignoredCountries ?? [],
+      userId: req.user!.id,
     });
     res.json({ jobs });
   } catch (error) {
@@ -154,6 +156,20 @@ jobsRouter.post("/:projectId/ignore", async (req, res, next) => {
     }
     await ignoreJobService(projectId);
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Permanently delete locally stored jobs older than 24h (by when they were
+ * stored), plus their proposals and stored competitor bid data. The user's own
+ * submitted-bid history is kept. Returns how many of each were removed.
+ */
+jobsRouter.post("/clean", async (req, res, next) => {
+  try {
+    const removed = cleanStaleJobs(req.user!.id);
+    res.json({ ok: true, removed });
   } catch (error) {
     next(error);
   }

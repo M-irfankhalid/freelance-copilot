@@ -12,6 +12,104 @@ const log = createLogger("analysis");
 /** The model we use when the user has not picked one. */
 const DEFAULT_MODEL = "openai/gpt-4o-mini";
 
+
+/**
+ * Output-token cap for the fast relevance gate (Model A). It returns one score
+ * plus a short reason, so a generous-but-finite cap stops a verbose model from
+ * padding the bill on what is meant to be a cheap call.
+ */
+const RELEVANCE_MAX_TOKENS = 500;
+
+/** Output-token cap for the full job analysis. Bounds the deep-analysis call. */
+const ANALYSIS_MAX_TOKENS = 1000;
+
+/**
+ * OpenAI-style `response_format` that asks the provider to enforce a JSON
+ * schema on the reply (structured outputs). The user's analysis model supports
+ * it; models without `response_format` support are handled by NOT sending one
+ * (proposal calls stay free-form, and the two analysis calls below opt in via
+ * these constants).
+ */
+export interface JsonSchemaResponseFormat {
+  type: "json_schema";
+  json_schema: {
+    name: string;
+    strict: boolean;
+    schema: Record<string, unknown>;
+  };
+}
+
+/** Build a strict JSON-schema response_format. */
+function jsonSchemaResponseFormat(
+  name: string,
+  schema: Record<string, unknown>
+): JsonSchemaResponseFormat {
+  return { type: "json_schema", json_schema: { name, strict: true, schema } };
+}
+
+/**
+ * Output contract for the fast relevance gate (Model A). Guarantees the model
+ * emits exactly {score: 0-100 integer, reason: short string} and nothing else,
+ * so the gate decision never has to be recovered from prose.
+ */
+export const RELEVANCY_RESPONSE_FORMAT: JsonSchemaResponseFormat = jsonSchemaResponseFormat(
+  "relevancy_check",
+  {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      score: {
+        type: "integer",
+        description:
+          "0-100. How worth pursuing this job is, combining profile fit with client trustworthiness.",
+      },
+      reason: {
+        type: "string",
+        description: "One short sentence (under 25 words) naming the single deciding factor.",
+      },
+    },
+    required: ["score", "reason"],
+  }
+);
+
+/**
+ * Output contract for the deep job analysis. Mirrors AnalysisResult so every
+ * required field is present and correctly typed before the code ever reads it.
+ */
+export const ANALYSIS_RESPONSE_FORMAT: JsonSchemaResponseFormat = jsonSchemaResponseFormat(
+  "job_analysis",
+  {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      verdict: { type: "string", enum: ["strong", "good", "fair"] },
+      score: { type: "integer", description: "0-100 overall quality of the opportunity." },
+      summary: { type: "string", description: "2-3 sentences on why it does or does not fit." },
+      reasons: {
+        type: "array",
+        items: { type: "string" },
+        description: "Why the job matches the profile.",
+      },
+      concerns: {
+        type: "array",
+        items: { type: "string" },
+        description: "Risks or gaps, e.g. missing skills or client concerns.",
+      },
+      recommendedBidLabel: { type: "string", description: "Suggested bid amount or range." },
+      competitorNote: { type: "string", description: "Brief note on the competition." },
+    },
+    required: [
+      "verdict",
+      "score",
+      "summary",
+      "reasons",
+      "concerns",
+      "recommendedBidLabel",
+      "competitorNote",
+    ],
+  }
+);
+
 interface CredentialMeta {
   /** Legacy single model selection — fallback for both roles. */
   modelId?: string;
@@ -356,6 +454,25 @@ Validate your output against the profile facts. If the user lacks required skill
 }
 
 /**
+ * Optional transport control for an OpenRouter call. Analysis calls send a
+ * bounded output so the model keeps its answer short and on-point; proposal
+ * generation stays uncapped so long-form text is never truncated. Calls that
+ * must return structured JSON (relevance gate, deep analysis) opt into
+ * `responseFormat`, an enforced JSON schema; everything else stays plain text.
+ */
+export interface AiCallOptions {
+  /** Hard cap on generated output tokens (`max_tokens`). */
+  maxTokens?: number;
+  /**
+   * Provider-enforced JSON-schema response format. Only set this when the
+   * selected model supports structured outputs AND the expected reply is an
+   * object; sending it to a model without `response_format` support fails the
+   * request (OpenRouter 400), so free-form calls must leave it undefined.
+   */
+  responseFormat?: JsonSchemaResponseFormat;
+}
+
+/**
  * Call OpenRouter using the user's saved API key and selected model.
  * `userPreferredModel` overrides the saved selection (used by the API route
  * to honor a per-request override if the UI ever needs it).
@@ -364,7 +481,8 @@ export async function callOpenRouter(
   systemPrompt: string,
   userPrompt: string,
   userPreferredModel?: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  opts?: AiCallOptions
 ): Promise<string> {
   const credRow = getDb()
     .select()
@@ -398,6 +516,10 @@ export async function callOpenRouter(
         { role: "user", content: userPrompt },
       ],
       temperature: 0.2,
+      ...(opts?.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+      ...(opts?.responseFormat !== undefined
+        ? { response_format: opts.responseFormat }
+        : {}),
     }),
     // LLM generation takes far longer than a REST fetch — the prompt includes
     // the full job description and the response is a structured analysis, so
@@ -454,32 +576,75 @@ export async function callOpenRouter(
 }
 
 /**
+ * Best-effort JSON-object extraction from an LLM reply. Backstop for any model
+ * or provider that does not honor `response_format`: some wrap the object in
+ * prose or a code fence, or leave a trailing comma. Before giving up we try, in
+ * order: the raw text as-is, the contents of every fenced code block, and the
+ * outermost {...} span when prose surrounds the object. Returns the parsed
+ * value, or null when nothing usable is found.
+ */
+function extractJsonObject(rawText: string): unknown {
+  const candidates: string[] = [rawText.trim()];
+
+  // Every fenced code block, whatever the language tag (json, jsonc, none, …).
+  const fence = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = fence.exec(rawText)) !== null) {
+    if (match[1] !== undefined && match[1].trim().length > 0) {
+      candidates.push(match[1].trim());
+    }
+  }
+
+  // The outermost brace span — covers "Here is the result: {…}" style output.
+  const open = rawText.indexOf("{");
+  const close = rawText.lastIndexOf("}");
+  if (open !== -1 && close > open) {
+    const span = rawText.slice(open, close + 1);
+    if (span.length > 0) candidates.push(span);
+  }
+
+  for (const candidate of candidates) {
+    const parsed = tryParseJsonObject(candidate);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+/** Parse one candidate as a JSON object, repairing a trailing comma if needed. */
+function tryParseJsonObject(text: string): unknown {
+  let attempt = text;
+  for (let pass = 0; pass < 5; pass++) {
+    try {
+      const value: unknown = JSON.parse(attempt);
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        return value;
+      }
+      return null; // Valid JSON, but not an object we can use.
+    } catch {
+      // Strip one "…," right before the final } or ] and try again.
+      const repaired = attempt.replace(/,\s*([}\]])$/, "$1");
+      if (repaired === attempt) return null;
+      attempt = repaired;
+    }
+  }
+  return null;
+}
+
+/** Parse failure message that previews what the model actually returned. */
+function unparsableJsonMessage(kind: string, rawText: string): string {
+  const preview = rawText.trim().replace(/\s+/g, " ").slice(0, 120);
+  return `AI ${kind} output could not be parsed as JSON. The model may have refused or returned an invalid format. Raw start: ${JSON.stringify(preview)}`;
+}
+
+/**
  * Validate that AI output is properly structured JSON matching RelevancyCheck.
  * The fast relevance model (Model A) returns a gate decision, never free-form.
  */
 export function validateRelevancyOutput(rawText: string): RelevancyCheck {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText.trim());
-  } catch {
-    const match = rawText.match(/```json\n([\s\S]*?)\n```/);
-    if (match && match[1] !== undefined) {
-      try {
-        parsed = JSON.parse(match[1].trim());
-      } catch {
-        parsed = null;
-      }
-    } else {
-      parsed = null;
-    }
-  }
+  const parsed = extractJsonObject(rawText);
 
-  if (parsed === null || typeof parsed !== "object") {
-    throw new AppError(
-      500,
-      "INTERNAL",
-      "AI relevance output could not be parsed as JSON. The model may have refused or returned an invalid format."
-    );
+  if (parsed === null) {
+    throw new AppError(500, "INTERNAL", unparsableJsonMessage("relevance", rawText));
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -574,7 +739,7 @@ Return ONE score (0-100) plus a one-sentence reason. A score of 80+ makes the jo
 - NDA / IP-contract projects are never auto-bid regardless of score (they need a signature); score them anyway for manual review.
 - A short description is not a reason to reject a job.
 
-Return ONLY JSON: {"score": number 0-100, "reason": "one short sentence (under 25 words) naming the deciding factor"}
+Respond with ONLY a single valid JSON object and nothing else — no markdown, no code fences, no text before or after. Format: {"score": number 0-100, "reason": "one short sentence (under 25 words) naming the deciding factor"}
 `.trim();
 }
 
@@ -591,7 +756,9 @@ export async function checkRelevancyWithAI(
   const rawResponse = await callOpenRouter(
     systemPrompt,
     buildRelevancyPrompt(data),
-    readAnalysisModel() ?? undefined
+    readAnalysisModel() ?? undefined,
+    undefined,
+    { maxTokens: RELEVANCE_MAX_TOKENS, responseFormat: RELEVANCY_RESPONSE_FORMAT }
   );
   const result = validateRelevancyOutput(rawResponse);
   log.info(`Relevance gate: score=${result.score}`, {
@@ -606,29 +773,10 @@ export async function checkRelevancyWithAI(
  * The AI must not invent facts — this validates before use.
  */
 export function validateAnalysisOutput(rawText: string): AnalysisResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText.trim());
-  } catch {
-    // Try extracting JSON from markdown code blocks
-    const match = rawText.match(/```json\n([\s\S]*?)\n```/);
-    if (match && match[1] !== undefined) {
-      try {
-        parsed = JSON.parse(match[1].trim());
-      } catch {
-        parsed = null;
-      }
-    } else {
-      parsed = null;
-    }
-  }
+  const parsed = extractJsonObject(rawText);
 
-  if (parsed === null || typeof parsed !== "object") {
-    throw new AppError(
-      500,
-      "INTERNAL",
-      "AI output could not be parsed as JSON. The model may have refused or returned invalid format."
-    );
+  if (parsed === null) {
+    throw new AppError(500, "INTERNAL", unparsableJsonMessage("analysis", rawText));
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -838,7 +986,13 @@ export async function analyzeJob(
 
   const userPrompt = buildAnalysisPrompt(promptData);
 
-  const rawResponse = await callOpenRouter(systemPrompt, userPrompt, preferredModel);
+  const rawResponse = await callOpenRouter(
+    systemPrompt,
+    userPrompt,
+    preferredModel,
+    undefined,
+    { maxTokens: ANALYSIS_MAX_TOKENS, responseFormat: ANALYSIS_RESPONSE_FORMAT }
+  );
   const result = validateAnalysisOutput(rawResponse);
 
   log.info(

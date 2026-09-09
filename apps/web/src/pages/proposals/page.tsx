@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Bot, Check, PencilLine, RefreshCw, Send } from "lucide-react";
+import { Bot, Check, MoreHorizontal, PencilLine, RefreshCw, Send, Trash2, X } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
+import { CleanStaleButton } from "@/components/dashboard/clean-stale-button";
 import { ProposalStatusBadge } from "@/components/dashboard/status-badges";
 import {
   Dialog,
@@ -11,6 +12,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -32,7 +39,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, ApiError, NetworkError } from "@/lib/api/client";
 import { useApi } from "@/lib/api/hooks";
-import type { ProposalRecord } from "@/lib/types";
+import type { ProposalRecord, ProposalStatus } from "@/lib/types";
 
 interface ProposalsListResponse {
   proposals: ProposalRecord[];
@@ -51,9 +58,12 @@ export default function ProposalsPage() {
   const [draftText, setDraftText] = useState("");
   const [saving, setSaving] = useState(false);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<ProposalRecord | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const queue = proposals.filter((p) => p.status === "awaiting_approval");
+  const drafts = proposals.filter((p) => p.status === "draft");
 
   const openEditor = (proposal: ProposalRecord) => {
     setEditing(proposal);
@@ -81,16 +91,41 @@ export default function ProposalsPage() {
     }
   };
 
-  const approve = async (id: string) => {
+  /** Move a proposal to a new status via the approval-queue state machine. */
+  const changeStatus = async (id: string, status: ProposalStatus) => {
     setActionError(null);
     try {
       await api<{ ok: true }>(`/api/proposals/${id}/status`, {
         method: "PUT",
-        body: { status: "queued" },
+        body: { status },
       });
       refetch();
     } catch (cause) {
       setActionError(messageFor(cause));
+    }
+  };
+
+  const approve = (id: string) => changeStatus(id, "queued");
+
+  const approveDraft = (id: string) => changeStatus(id, "approved");
+
+  const declineDraft = (id: string) => changeStatus(id, "declined");
+
+  /** Permanently remove a draft proposal (after confirmation). */
+  const confirmDelete = async () => {
+    if (deleting === null) return;
+    setDeletePending(true);
+    setActionError(null);
+    try {
+      await api<{ ok: true }>(`/api/proposals/${deleting.id}`, {
+        method: "DELETE",
+      });
+      setDeleting(null);
+      refetch();
+    } catch (cause) {
+      setActionError(messageFor(cause));
+    } finally {
+      setDeletePending(false);
     }
   };
 
@@ -123,6 +158,7 @@ export default function ProposalsPage() {
       <PageHeader
         title="Proposals"
         description="Agent drafts grounded in your profile. Nothing is sent until you approve."
+        actions={<CleanStaleButton onCleaned={() => refetch()} />}
       />
 
       {error !== null ? (
@@ -226,7 +262,7 @@ export default function ProposalsPage() {
                       {proposal.client}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      ${proposal.bidAmount}
+                      {bidLabel(proposal.bidAmount)}
                     </TableCell>
                     <TableCell>
                       <ProposalStatusBadge status={proposal.status} />
@@ -235,13 +271,26 @@ export default function ProposalsPage() {
                       {proposal.updatedLabel}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => openEditor(proposal)}
-                      >
-                        View / edit
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => openEditor(proposal)}
+                        >
+                          View / edit
+                        </Button>
+                        {proposal.status === "draft" ? (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-label="Delete draft"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => setDeleting(proposal)}
+                          >
+                            <Trash2 aria-hidden />
+                          </Button>
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -252,11 +301,73 @@ export default function ProposalsPage() {
 
         {/* Drafts */}
         <TabsContent value="drafts" className="flex flex-col gap-4">
-          {proposals.filter((p) => p.status === "draft").length === 0 ? (
+          {drafts.length === 0 ? (
             <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
               No saved drafts. Drafts you start manually will collect here.
             </p>
-          ) : null}
+          ) : (
+            drafts.map((proposal) => (
+              <Card key={proposal.id}>
+                <CardHeader>
+                  <CardTitle>{proposal.jobTitle}</CardTitle>
+                  <CardDescription>
+                    {proposal.client} · {bidLabel(proposal.bidAmount)}
+                  </CardDescription>
+                </CardHeader>
+                <CardFooter className="flex-col items-stretch gap-3 md:flex-row md:items-center">
+                  <p className="line-clamp-2 flex-1 text-sm text-muted-foreground">
+                    {proposal.content.split("\n")[0]}
+                  </p>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => regenerate(proposal)}
+                      disabled={isRegenerating(proposal.id)}
+                    >
+                      <RefreshCw
+                        data-icon="inline-start"
+                        className={isRegenerating(proposal.id) ? "animate-spin" : undefined}
+                      />
+                      Regenerate
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEditor(proposal)}
+                    >
+                      <PencilLine data-icon="inline-start" />
+                      Edit
+                    </Button>
+                    <Button size="sm" onClick={() => void approveDraft(proposal.id)}>
+                      <Check data-icon="inline-start" />
+                      Approve
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="sm" aria-label="More actions">
+                          <MoreHorizontal aria-hidden />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" sideOffset={6}>
+                        <DropdownMenuItem onSelect={() => void declineDraft(proposal.id)}>
+                          <X aria-hidden />
+                          Decline
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() => setDeleting(proposal)}
+                        >
+                          <Trash2 aria-hidden />
+                          Delete draft
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </CardFooter>
+              </Card>
+            ))
+          )}
         </TabsContent>
       </Tabs>
 
@@ -304,8 +415,50 @@ export default function ProposalsPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && !deletePending && setDeleting(null)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete draft?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the draft proposal for{" "}
+              <span className="font-medium text-foreground">{deleting?.jobTitle}</span>. This
+              cannot be undone — decline it instead if you want to keep it in your history.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setDeleting(null)}
+              disabled={deletePending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+              disabled={deletePending}
+            >
+              <Trash2 data-icon="inline-start" />
+              {deletePending ? "Deleting…" : "Delete draft"}
+            </Button>
+          </DialogFooter>
+          {actionError ? (
+            <p className="text-sm text-destructive">{actionError}</p>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+/** Bid amount text — drafts have no amount until set at bid time. */
+function bidLabel(amount: number | null | undefined): string {
+  return amount != null ? `$${amount.toLocaleString()}` : "No bid amount set";
 }
 
 function messageFor(cause: unknown): string {

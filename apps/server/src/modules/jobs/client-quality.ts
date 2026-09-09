@@ -233,3 +233,34 @@ export function clientTrustConcerns(
   }
   return out;
 }
+
+/**
+ * True when the project carries none of the paid/signing upgrades Freelancer.com
+ * exposes. "No upgrades on the job" is one leg of the bad-reputation rule.
+ */
+export function hasNoProjectUpgrades(q: ClientQuality): boolean {
+  return Object.values(q.upgrades).every((v) => v === false);
+}
+
+/**
+ * "Completely bad" client gate — run BEFORE the AI analysis model so we never
+ * spend a call on a client with no redeemable signals. Rejects only when we can
+ * prove every signal is bad: a brand-new account (under `maxAgeDays`, default
+ * 30) whose payment method is unverified, that has never funded an escrow
+ * deposit, and whose project carries no upgrades. Any verified payment, any
+ * deposit history, any project upgrade, or an account we can't prove is new
+ * lets the job proceed to analysis.
+ */
+export function isBadReputationClient(
+  q: ClientQuality | null,
+  maxAgeDays = 30
+): boolean {
+  if (q === null) return false;
+  if (q.paymentVerified === true) return false;
+  if (q.depositMade === true) return false;
+  if (!hasNoProjectUpgrades(q)) return false;
+  const days = accountAgeDays(q);
+  // Don't reject on unknown age — only when we can prove the account is brand new.
+  if (days === null || days >= maxAgeDays) return false;
+  return true;
+}

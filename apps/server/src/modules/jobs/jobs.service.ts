@@ -2,8 +2,14 @@ import { getDb } from "../../db/index.js";
 import { AppError, notFound } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
 import { createLogger } from "../../lib/logger.js";
-import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { platformCredentials, jobs as jobsTable, bids as bidsTable, userBids } from "../../db/schema.js";
+import { and, desc, eq, inArray, lt, sql, type SQL } from "drizzle-orm";
+import {
+  platformCredentials,
+  jobs as jobsTable,
+  bids as bidsTable,
+  proposals as proposalsTable,
+  userBids,
+} from "../../db/schema.js";
 import { getProfile } from "../profile/profile.service.js";
 import { checkRelevancyWithAI } from "../ai/ai.service.js";
 import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
@@ -28,7 +34,9 @@ import {
   reputationLabel,
   presentUpgradeLabels,
   clientTrustConcerns,
+  isBadReputationClient,
 } from "./client-quality.js";
+import { getPreanalysisGates } from "./preanalysis-gates.js";
 
 const log = createLogger("sync");
 
@@ -41,6 +49,22 @@ const RELEVANCE_IGNORE_FLOOR = 50;
 
 /** Scores at/above this but below the auto-bid threshold are "needs review" candidates. */
 export const MANUAL_REVIEW_FLOOR = 60;
+
+/**
+ * Hard freshness gate applied at fetch time. Projects posted longer ago than
+ * this are rejected the moment the search results come back: they already have
+ * too much competition to win. A stale project is never stored (not even a
+ * marker row) and never proceeds through the analysis/draft/bid pipeline.
+ */
+export const MAX_PROJECT_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+/**
+ * Age threshold for the manual "Clean" action. Jobs stored in the local cache
+ * longer than this are stale (too old to bid on) and are removed together with
+ * everything attached to them — proposals and stored bid data. The user's own
+ * submitted-bid history (user_bids) is always kept.
+ */
+export const CLEAN_STALE_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export type { JobSummary as JobResponse };
 
@@ -70,6 +94,18 @@ export function relativeLabel(unixSeconds: number, nowMs: number = Date.now()): 
 
 function postedLabelFor(project: FreelancerProject): string {
   return relativeLabel(project.time_submitted ?? 0);
+}
+
+/**
+ * Age in milliseconds of a project from its `time_submitted` Unix-seconds
+ * timestamp. Returns null when the timestamp is missing or invalid so callers
+ * can treat the project as fresh — if we can't prove it's stale, we don't drop
+ * it.
+ */
+function postedAgeMs(project: FreelancerProject): number | null {
+  const ts = project.time_submitted;
+  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return null;
+  return Date.now() - ts * 1000;
 }
 
 function requireFreelancerToken(): string {
@@ -406,6 +442,9 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
   const token = requireFreelancerToken();
   const client = new FreelancerApiClient(token);
   const skillIds = filters.skillIds ?? deriveSkillIds(filters.skills);
+  // Pre-analysis rejection toggles for this user (default all-on when no
+  // automation settings row exists yet, or no userId was passed).
+  const gates = getPreanalysisGates(filters.userId ?? "");
 
   let projects: FreelancerProject[];
   try {
@@ -423,16 +462,32 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
   const summaries: JobSummary[] = [];
 
   for (const project of projects) {
+    // Freshness gate (toggleable): reject stale projects the moment they're
+    // fetched. Older than 12h they already have heavy competition, so when the
+    // rule is on we drop them completely — no DB row, no summary, no downstream
+    // pipeline step. Switch it off in Automation to let older jobs through.
+    const ageMs = postedAgeMs(project);
+    if (gates.rejectStaleJobs && ageMs !== null && ageMs > MAX_PROJECT_AGE_MS) {
+      log.info(
+        `Project ${project.id} (${project.title ?? "Untitled"}): REJECTED — ${relativeLabel(
+          project.time_submitted ?? 0
+        )} old, outside the ${MAX_PROJECT_AGE_MS / 3_600_000}h freshness window`
+      );
+      continue;
+    }
+
     const postedLabel = postedLabelFor(project);
     const summary = client.mapToJobSummary(project, postedLabel);
-    // Jobs from ignored countries are excluded entirely — stored as a minimal
+    // Jobs from ignored countries are excluded by default — stored as a minimal
     // marker row (status "ignored", no rawData) and never surfaced as analysis
-    // candidates. The API can report the country under either `location` or
-    // `owner_info`, so check both (each call is a no-op when the country is
-    // missing).
-    const ignored =
+    // candidates. When the country gate is switched off these jobs are stored
+    // normally and analyzed like any other. The API can report the country
+    // under either `location` or `owner_info`, so check both (each call is a
+    // no-op when the country is missing).
+    const countryIgnored =
       isCountryIgnored(project?.location?.country, filters.ignoredCountries ?? []) ||
       isCountryIgnored(project?.owner_info?.country, filters.ignoredCountries ?? []);
+    const ignored = gates.rejectIgnoredCountries && countryIgnored;
     const storedStatus: JobSummary["status"] = ignored ? "ignored" : "new";
 
     const existing = getDb()
@@ -717,6 +772,9 @@ export async function analyzeJob(
     );
   }
 
+  // Pre-analysis rejection toggles from Automation (country gate + bad-client gate).
+  const gates = getPreanalysisGates(userId);
+
   // Pre-flight: Freelancer token must be present locally.
   const token = requireFreelancerToken();
   const client = new FreelancerApiClient(token);
@@ -733,9 +791,10 @@ export async function analyzeJob(
   }
 
   // Defense in depth: even if a job slipped through the ingest filter, never
-  // spend AI tokens on a country the user asked to exclude entirely.
+  // spend AI tokens on a country the user asked to exclude — unless the country
+  // gate has been switched off in Automation.
   const country = project.location?.country;
-  if (isCountryIgnored(country, profile.ignoredCountries)) {
+  if (gates.rejectIgnoredCountries && isCountryIgnored(country, profile.ignoredCountries)) {
     const countryLabel = country?.name ?? country?.code ?? "unknown";
     const now = new Date().toISOString();
     getDb()
@@ -827,6 +886,26 @@ export async function analyzeJob(
   // upgrade flags) and becomes matchScore, which gates auto-bid. Below the
   // ignore floor the job is marked ignored — not worth surfacing or bidding on.
   const clientQuality = extractClientQuality(project);
+
+  // Step 2a: brand-new bad-reputation client hard reject, BEFORE the paid model.
+  // When the toggle is on and the client provably has nothing going for it — a
+  // brand-new account (<30 days) with no verified payment, no escrow deposit,
+  // and no project upgrades — skip analysis entirely. Any positive signal
+  // (verified payment, deposit history, any project upgrade) or an account we
+  // can't prove is brand new lets the job proceed.
+  if (gates.rejectBadReputation && isBadReputationClient(clientQuality)) {
+    log.info(
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — brand-new client with no trust signals, skipped before AI analysis`
+    );
+    const gateConcerns = clientTrustConcerns(clientQuality, project.type);
+    return storeIgnored(
+      0,
+      gateConcerns,
+      "This job was rejected before AI analysis — the client is a brand-new account (under 30 days) with no verified payment, no escrow deposit, and no project upgrades.",
+      "Brand-new client with no trust signals: no verified payment, no deposit history, and no project upgrades."
+    );
+  }
+
   const check = await checkRelevancyWithAI({
     jobTitle: project.title ?? "(untitled project)",
     jobDescription,
@@ -947,6 +1026,87 @@ export async function ignoreJob(projectId: number): Promise<void> {
     throw notFound(`Job with project ID ${projectId} not found`);
   }
   log.info(`Ignored job ${projectId}`);
+}
+
+export interface CleanStaleResult {
+  jobs: number;
+  proposals: number;
+  bids: number;
+}
+
+/**
+ * Remove jobs stored in the local cache longer than `CLEAN_STALE_AGE_MS` and
+ * everything attached to them: proposals (any status) and stored competitor
+ * bid data. The user's own submitted-bid history (user_bids) is preserved —
+ * only the proposal_id link to a removed proposal is cleared so those rows
+ * never dangle. Proposals are scoped to the user; jobs and competitor bids are
+ * shared cache, so they are removed regardless of who stored them.
+ */
+export function cleanStaleJobs(
+  userId: string,
+  now: number = Date.now()
+): CleanStaleResult {
+  const cutoff = new Date(now - CLEAN_STALE_AGE_MS).toISOString();
+  const db = getDb();
+
+  const stale = db
+    .select({ id: jobsTable.id, projectId: jobsTable.projectId })
+    .from(jobsTable)
+    .where(lt(jobsTable.importedAt, cutoff))
+    .all();
+  if (stale.length === 0) {
+    log.info("Clean: no stale jobs to remove");
+    return { jobs: 0, proposals: 0, bids: 0 };
+  }
+
+  const staleProjectIds = stale.map((row) => row.projectId);
+  const staleJobIds = stale.map((row) => row.id);
+
+  // Proposals to remove — the user's rows on the stale projects.
+  const doomedProposals = db
+    .select({ id: proposalsTable.id })
+    .from(proposalsTable)
+    .where(
+      and(
+        eq(proposalsTable.userId, userId),
+        inArray(proposalsTable.projectId, staleProjectIds)
+      )
+    )
+    .all();
+  const proposalIds = doomedProposals.map((row) => row.id);
+
+  // Keep the bid history: sever the proposal link before the proposal goes.
+  if (proposalIds.length > 0) {
+    db.update(userBids)
+      .set({ proposalId: null })
+      .where(
+        and(eq(userBids.userId, userId), inArray(userBids.proposalId, proposalIds))
+      )
+      .run();
+  }
+
+  if (proposalIds.length > 0) {
+    db.delete(proposalsTable)
+      .where(inArray(proposalsTable.id, proposalIds))
+      .run();
+  }
+  const bidsRemoved = db
+    .delete(bidsTable)
+    .where(inArray(bidsTable.projectId, staleProjectIds))
+    .run().changes;
+  db.delete(jobsTable)
+    .where(inArray(jobsTable.id, staleJobIds))
+    .run();
+
+  const result: CleanStaleResult = {
+    jobs: stale.length,
+    proposals: proposalIds.length,
+    bids: bidsRemoved,
+  };
+  log.info(
+    `Clean: removed ${result.jobs} job(s), ${result.proposals} proposal(s), ${result.bids} stored bid row(s) stored >24h ago`
+  );
+  return result;
 }
 
 /**

@@ -16,6 +16,9 @@ process.env.ENCRYPTION_KEY ??= "test-master-key-at-least-32-chars-long!!";
 const { applyRelevancyFilter, isCountryIgnored } = await import("../src/modules/ai/relevancy.js");
 const { createApp } = await import("../src/app.js");
 const { closeDb } = await import("../src/db/index.js");
+const { validateRelevancyOutput, validateAnalysisOutput } = await import(
+  "../src/modules/ai/ai.service.js"
+);
 
 let app: Express;
 let baseUrl: string;
@@ -445,6 +448,81 @@ describe("analyzeJob integration", () => {
     expect(body.analysis.recommendedBid).toBe("—");
   });
 
+  it("enforces a strict relevance JSON schema and caps gate output tokens", async () => {
+    // Capture the OpenRouter request body. The relevance-gate call bounds its
+    // output (max_tokens) AND sends a provider-enforced `response_format` JSON
+    // schema so the gate decision comes back conformant on the user's model
+    // (which supports structured outputs), rather than relying on the prompt.
+    let requestBody: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith(baseUrl)) return realFetch(input, init);
+        if (url.includes("freelancer.com/api/projects/0.1/projects/200001")) {
+          return new Response(
+            JSON.stringify({
+              status: "success",
+              result: {
+                id: 200001,
+                title: "React dashboard with charts",
+                description: "We need a React dashboard with charts.",
+                preview_description: "React dashboard with charts.",
+                currency: { code: "USD" },
+                budget: { minimum: 100, maximum: 500 },
+                bid_stats: { bid_count: 3, bid_avg: 300, min_amount: 100, max_amount: 400 },
+                time_submitted: Math.floor(Date.now() / 1000) - 60,
+                jobs: [
+                  { id: 759, name: "React.js" },
+                  { id: 500, name: "Node.js" },
+                ],
+                location: { country: { name: "Germany" } },
+              },
+            }),
+            { status: 200 }
+          );
+        }
+        if (url.includes("openrouter.ai/api/v1/chat/completions")) {
+          requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      score: 72,
+                      reason: "Matches your React and Node.js dashboard skills.",
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("not found", { status: 404 });
+      })
+    );
+
+    const r = await realFetch(`${baseUrl}/api/jobs/200001/analyze`, {
+      method: "POST",
+      headers: authed(),
+    });
+    expect(r.status).toBe(200);
+    expect(requestBody).not.toBeNull();
+    // The gate request carries a strict JSON-schema response_format so the
+    // model's reply is provider-enforced to the {score, reason} shape.
+    const rf = requestBody?.["response_format"] as
+      | { type: string; json_schema?: { name?: string; strict?: boolean } }
+      | undefined;
+    expect(rf?.type).toBe("json_schema");
+    expect(rf?.json_schema?.name).toBe("relevancy_check");
+    expect(rf?.json_schema?.strict).toBe(true);
+    const maxTokens = Number(requestBody?.["max_tokens"]);
+    expect(Number.isFinite(maxTokens)).toBe(true);
+    expect(maxTokens).toBeLessThanOrEqual(500);
+  });
+
   it("marks a country-ignored job as ignored and never calls OpenRouter", async () => {
     // Put Germany on the ignore list — the job below is from Germany.
     const putRes = await realFetch(`${baseUrl}/api/profile`, {
@@ -551,5 +629,69 @@ describe("analyzeJob integration", () => {
         }),
       });
     }
+  });
+});
+
+describe("AI JSON output validation (no JSON mode support)", () => {
+  it("parses bare JSON", () => {
+    expect(
+      validateRelevancyOutput('{"score": 75, "reason": "Skills overlap with profile"}')
+    ).toEqual({ score: 75, reason: "Skills overlap with profile" });
+  });
+
+  it("parses JSON wrapped in a fenced code block with a language tag", () => {
+    const raw = '```json\n{"score": 60, "reason": "Decent overlap on React."}\n```';
+    expect(validateRelevancyOutput(raw)).toEqual({
+      score: 60,
+      reason: "Decent overlap on React.",
+    });
+  });
+
+  it("parses JSON wrapped in prose and backticks", () => {
+    const raw =
+      'Here is my assessment:\n\n```\n{"score": 82, "reason": "Strong match on Node skills."}\n```\n\nLet me know if you need more.';
+    expect(validateRelevancyOutput(raw)).toEqual({
+      score: 82,
+      reason: "Strong match on Node skills.",
+    });
+  });
+
+  it("parses JSON when prose surrounds the object without fences", () => {
+    const raw =
+      'Sure! Based on the job the score is {"score": 55, "reason": "Partial skill overlap."} as I see it.';
+    expect(validateRelevancyOutput(raw)).toEqual({
+      score: 55,
+      reason: "Partial skill overlap.",
+    });
+  });
+
+  it("tolerates a trailing comma before the closing brace", () => {
+    const raw = '{"score": 70, "reason": "Good overlap.",}';
+    expect(validateRelevancyOutput(raw)).toEqual({
+      score: 70,
+      reason: "Good overlap.",
+    });
+  });
+
+  it("validates the full analysis object shape", () => {
+    const raw = JSON.stringify({
+      verdict: "good",
+      score: 88,
+      summary: "A strong project that fits your React and Node profile well.",
+      reasons: ["React.js dashboard experience applies"],
+      concerns: [],
+      recommendedBidLabel: "$1200 – $1800",
+      competitorNote: "4 bids already.",
+    });
+    const out = validateAnalysisOutput(raw);
+    expect(out.verdict).toBe("good");
+    expect(out.score).toBe(88);
+    expect(out.reasons).toHaveLength(1);
+  });
+
+  it("throws a diagnosable error when the model returns nothing usable", () => {
+    expect(() => validateRelevancyOutput("I am sorry, I cannot help with that.")).toThrow(
+      /could not be parsed as JSON/
+    );
   });
 });

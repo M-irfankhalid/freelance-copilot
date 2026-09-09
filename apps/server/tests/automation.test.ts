@@ -220,6 +220,10 @@ describe("automation settings", () => {
       expect(settings.dailyCap).toBe(5);
       expect(settings.paused).toBe(false);
       expect(settings.bidsToday).toBe(0);
+      // Pre-analysis screening rules all start ON.
+      expect(settings.rejectStaleJobs).toBe(true);
+      expect(settings.rejectIgnoredCountries).toBe(true);
+      expect(settings.rejectBadReputation).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -235,12 +239,26 @@ describe("automation settings", () => {
           autobidEnabled: true,
           minMatchScore: 70,
           dailyCap: 3,
+          rejectStaleJobs: false,
+          rejectIgnoredCountries: false,
+          rejectBadReputation: false,
         }),
       });
       expect(res.status).toBe(200);
-      const { settings } = (await res.json()) as { settings: { autobidEnabled: boolean; minMatchScore: number } };
+      const { settings } = (await res.json()) as {
+        settings: {
+          autobidEnabled: boolean;
+          minMatchScore: number;
+          rejectStaleJobs: boolean;
+          rejectIgnoredCountries: boolean;
+          rejectBadReputation: boolean;
+        };
+      };
       expect(settings.autobidEnabled).toBe(true);
       expect(settings.minMatchScore).toBe(70);
+      expect(settings.rejectStaleJobs).toBe(false);
+      expect(settings.rejectIgnoredCountries).toBe(false);
+      expect(settings.rejectBadReputation).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

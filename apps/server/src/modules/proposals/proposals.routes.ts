@@ -9,6 +9,7 @@ import {
   getProposalByJob,
   updateProposalStatus,
   saveProposal,
+  deleteProposal,
   generateProposal,
   regenerateProposal,
   type ProposalStatus,
@@ -224,6 +225,16 @@ proposalsRouter.put("/:id", async (req, res, next) => {
     );
 
     await saveProposal(req.user!.id, req.params.id, input.content, input.bidAmount);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Delete a draft proposal. Non-drafts are refused (decline instead). */
+proposalsRouter.delete("/:id", async (req, res, next) => {
+  try {
+    await deleteProposal(req.user!.id, req.params.id);
     res.json({ ok: true });
   } catch (error) {
     next(error);

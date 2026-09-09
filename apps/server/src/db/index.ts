@@ -110,6 +110,16 @@ function ensureSchema(db: Database.Database): void {
     if (!autoColNames.has("proposal_threshold")) {
       db.exec("ALTER TABLE automation_settings ADD COLUMN proposal_threshold INTEGER NOT NULL DEFAULT 70");
     }
+    // Pre-analysis rejection toggles (all default ON, matching historical behavior).
+    for (const col of [
+      "reject_stale_jobs",
+      "reject_ignored_countries",
+      "reject_bad_reputation",
+    ] as const) {
+      if (!autoColNames.has(col)) {
+        db.exec(`ALTER TABLE automation_settings ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1`);
+      }
+    }
   }
 
   db.exec(`
@@ -277,6 +287,9 @@ function ensureSchema(db: Database.Database): void {
       cap_date TEXT,
       paused INTEGER NOT NULL DEFAULT 0,
       consecutive_errors INTEGER NOT NULL DEFAULT 0,
+      reject_stale_jobs INTEGER NOT NULL DEFAULT 1,
+      reject_ignored_countries INTEGER NOT NULL DEFAULT 1,
+      reject_bad_reputation INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

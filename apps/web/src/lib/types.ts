@@ -303,6 +303,12 @@ export interface AutomationSettings {
   dailyCap: number;
   bidsToday: number;
   paused: boolean;
+  /** Reject jobs posted more than 12h ago before they are even stored. */
+  rejectStaleJobs: boolean;
+  /** Reject jobs whose client country is on the profile ignore list. */
+  rejectIgnoredCountries: boolean;
+  /** Reject brand-new, unverified clients (no deposit/upgrades) before analysis. */
+  rejectBadReputation: boolean;
 }
 
 export type AutomationRunResult = "ok" | "skipped" | "error";

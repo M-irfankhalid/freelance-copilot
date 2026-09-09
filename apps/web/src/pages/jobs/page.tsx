@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
+import { CleanStaleButton } from "@/components/dashboard/clean-stale-button";
 import { BidStateBadge, ScoreChip } from "@/components/shared/badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,13 +137,16 @@ export default function JobsPage() {
         title="Jobs"
         description="Everything the worker found for your keywords, plus anything you add manually."
         actions={
-          <Button onClick={handleScan} disabled={scanning || isLoading}>
-            <RefreshCw
-              className={scanning ? "animate-spin" : undefined}
-              data-icon="inline-start"
-            />
-            {scanning ? "Scanning…" : "Scan now"}
-          </Button>
+          <>
+            <Button onClick={handleScan} disabled={scanning || isLoading}>
+              <RefreshCw
+                className={scanning ? "animate-spin" : undefined}
+                data-icon="inline-start"
+              />
+              {scanning ? "Scanning…" : "Scan now"}
+            </Button>
+            <CleanStaleButton onCleaned={() => reset()} />
+          </>
         }
       />
 

@@ -5,7 +5,9 @@ import {
   accountAgeLabel,
   clientTrustConcerns,
   extractClientQuality,
+  hasNoProjectUpgrades,
   isAutoBidEligible,
+  isBadReputationClient,
   isBidBlocked,
   parseClientQuality,
   presentUpgradeLabels,
@@ -224,6 +226,111 @@ describe("account age + reputation labels", () => {
     const none = qualityFor(projectWith({}));
     expect(reputationLabel(rated)).toBe("4.6/5 from 8 ratings");
     expect(reputationLabel(none)).toBe("no public rating history");
+  });
+});
+
+describe("isBadReputationClient", () => {
+  it("rejects a brand-new account with no trust signals at all", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: false },
+          registration_date: NOW_SECONDS - 5 * 86400,
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q)).toBe(true);
+  });
+
+  it("proceeds when the client is brand new but payment is verified", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: true, deposit_made: false },
+          registration_date: NOW_SECONDS - 2 * 86400,
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q)).toBe(false);
+  });
+
+  it("proceeds when the client is brand new but has made an escrow deposit", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: true },
+          registration_date: NOW_SECONDS - 2 * 86400,
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q)).toBe(false);
+  });
+
+  it("proceeds when the project carries an upgrade, even for a new unverified client", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: false },
+          registration_date: NOW_SECONDS - 2 * 86400,
+        },
+        upgrades: { featured: true },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q)).toBe(false);
+  });
+
+  it("proceeds when the account is older than the brand-new window", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: false },
+          registration_date: NOW_SECONDS - 60 * 86400,
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q)).toBe(false);
+  });
+
+  it("proceeds when the account age is unknown — never rejects on missing data", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: false },
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(accountAgeDays(q)).toBeNull();
+    expect(isBadReputationClient(q)).toBe(false);
+  });
+
+  it("never rejects when the snapshot is missing entirely", () => {
+    expect(isBadReputationClient(null)).toBe(false);
+  });
+
+  it("honors a custom age window", () => {
+    const q = qualityFor(
+      projectWith({
+        owner_info: {
+          status: { payment_verified: false, deposit_made: false },
+          registration_date: NOW_SECONDS - 45 * 86400,
+        },
+      } as unknown as FreelancerProject)
+    );
+    expect(isBadReputationClient(q, 90)).toBe(true);
+    expect(isBadReputationClient(q, 30)).toBe(false);
+  });
+});
+
+describe("hasNoProjectUpgrades", () => {
+  it("is true when the project carries no upgrades", () => {
+    expect(hasNoProjectUpgrades(qualityFor(projectWith({})))).toBe(true);
+  });
+
+  it("is false when any upgrade is present", () => {
+    const q = qualityFor(
+      projectWith({ upgrades: { NDA: true } } as unknown as FreelancerProject)
+    );
+    expect(hasNoProjectUpgrades(q)).toBe(false);
   });
 });
 

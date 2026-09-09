@@ -107,6 +107,12 @@ beforeAll(async () => {
                     registration_date: 1690000000,
                   },
                 },
+                // Older than the 12h freshness gate — must be dropped at fetch.
+                {
+                  id: 100003,
+                  title: "Stale Laravel API",
+                  time_submitted: Math.floor(Date.now() / 1000) - 60 * 60 * 13,
+                },
               ],
             },
           }),
@@ -302,6 +308,23 @@ describe("jobs", () => {
     if (second === undefined) return;
     expect(second.postedLabel).toBe("3h ago");
     expect(second.clientCountry).toBe("United States");
+  });
+
+  it("drops projects older than 12 hours during search without storing them", async () => {
+    const search = await realFetch(`${baseUrl}/api/jobs/search`, {
+      headers: authed(),
+    });
+    expect(search.status).toBe(200);
+    const body = (await search.json()) as {
+      jobs: Array<{ projectId: number }>;
+    };
+    // The stale project (100003) is rejected at fetch time: not returned…
+    expect(body.jobs.some((j) => j.projectId === 100003)).toBe(false);
+
+    // …and not persisted — the local cache only holds the two fresh jobs.
+    const list = await realFetch(`${baseUrl}/api/jobs?limit=100`, { headers: authed() });
+    const cached = (await list.json()) as { jobs: Array<{ projectId: number }> };
+    expect(cached.jobs.map((j) => j.projectId)).not.toContain(100003);
   });
 
   it("returns the locally cached list from GET /api/jobs", async () => {
@@ -537,5 +560,167 @@ describe("jobs", () => {
     expect(bidded?.bidded).toBe(true);
     expect(bidded?.bidVia).toBe("auto");
     expect(bidded?.bidOutcome).toBe("won");
+  });
+
+  it("cleans jobs stored more than 24h and their proposals/bids, keeping bid history", async () => {
+    const { getDb } = await import("../src/db/index.js");
+    const { eq } = await import("drizzle-orm");
+    const {
+      users,
+      jobs,
+      proposals,
+      bids,
+      userBids,
+    } = await import("../src/db/schema.js");
+    const user = getDb()
+      .select({ id: users.id })
+      .from(users)
+      .limit(1)
+      .get();
+    if (user === undefined) throw new Error("No user row to attach rows to");
+
+    const now = new Date().toISOString();
+    const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+
+    // A job stored over 24h ago (stale) and one stored just now (fresh).
+    getDb()
+      .insert(jobs)
+      .values([
+        {
+          id: "job-900001",
+          projectId: 900001,
+          title: "Stale project",
+          client: "Client in USA",
+          clientCountry: "United States",
+          budgetLabel: "$100 – $500",
+          postedLabel: "1d ago",
+          bidCount: 0,
+          avgBidLabel: "$0",
+          status: "new",
+          importedAt: staleTime,
+          updatedAt: staleTime,
+        },
+        {
+          id: "job-900002",
+          projectId: 900002,
+          title: "Fresh project",
+          client: "Client in USA",
+          clientCountry: "United States",
+          budgetLabel: "$100 – $500",
+          postedLabel: "just now",
+          bidCount: 0,
+          avgBidLabel: "$0",
+          status: "new",
+          importedAt: now,
+          updatedAt: now,
+        },
+      ])
+      .run();
+
+    // A proposal on the stale project (non-draft status) linked to a submitted
+    // bid, plus competitor bid rows for that project.
+    getDb()
+      .insert(proposals)
+      .values({
+        id: "proposal-900001",
+        userId: user.id,
+        jobId: "job-900001",
+        projectId: 900001,
+        jobTitle: "Stale project",
+        client: "Client in USA",
+        status: "approved",
+        content: "A proposal body that would be removed with the stale job.",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    getDb()
+      .insert(userBids)
+      .values({
+        id: `bid-900001-${Date.now()}`,
+        userId: user.id,
+        projectId: 900001,
+        proposalId: "proposal-900001",
+        jobTitle: "Stale project",
+        client: "Client in USA",
+        amount: 250,
+        period: 7,
+        description: "Submitted proposal text",
+        status: "submitted",
+        outcome: "in_review",
+        via: "manual",
+        submittedAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    getDb()
+      .insert(bids)
+      .values([
+        {
+          id: "bid-900001-0",
+          projectId: 900001,
+          bidderId: 501,
+          bidderName: "DevA",
+          amount: 200,
+          isCheapest: 1,
+          fetchedAt: now,
+        },
+        {
+          id: "bid-900001-1",
+          projectId: 900001,
+          bidderId: 502,
+          bidderName: "DevB",
+          amount: 300,
+          isCheapest: 0,
+          fetchedAt: now,
+        },
+      ])
+      .run();
+
+    const clean = await realFetch(`${baseUrl}/api/jobs/clean`, {
+      method: "POST",
+      headers: authed(),
+    });
+    expect(clean.status).toBe(200);
+    const body = (await clean.json()) as {
+      ok: boolean;
+      removed: { jobs: number; proposals: number; bids: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.removed).toEqual({ jobs: 1, proposals: 1, bids: 2 });
+
+    // The stale job is gone; the fresh one survives.
+    const list = await realFetch(`${baseUrl}/api/jobs?limit=100`, {
+      headers: authed(),
+    });
+    const cached = (await list.json()) as { jobs: Array<{ projectId: number }> };
+    expect(cached.jobs.map((j) => j.projectId)).not.toContain(900001);
+    expect(cached.jobs.map((j) => j.projectId)).toContain(900002);
+
+    // Bid history is kept, with the proposal link severed.
+    const keptBid = getDb()
+      .select()
+      .from(userBids)
+      .where(eq(userBids.projectId, 900001))
+      .get();
+    expect(keptBid).toBeDefined();
+    expect(keptBid?.proposalId).toBeNull();
+    expect(keptBid?.description).toBe("Submitted proposal text");
+
+    // No competitor bid rows or proposals remain for the stale project.
+    const leftoverBids = getDb()
+      .select()
+      .from(bids)
+      .where(eq(bids.projectId, 900001))
+      .all();
+    expect(leftoverBids).toHaveLength(0);
+    const leftoverProposals = getDb()
+      .select()
+      .from(proposals)
+      .where(eq(proposals.projectId, 900001))
+      .all();
+    expect(leftoverProposals).toHaveLength(0);
   });
 });

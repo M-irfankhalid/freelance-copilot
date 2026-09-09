@@ -68,6 +68,12 @@ export interface AutomationSettings {
   paused: boolean;
   /** Consecutive pipeline errors before auto-pause. */
   consecutiveErrors: number;
+  /** Reject jobs posted more than 12h ago before they are even stored. */
+  rejectStaleJobs: boolean;
+  /** Reject jobs whose client country is on the profile ignore list. */
+  rejectIgnoredCountries: boolean;
+  /** Reject brand-new, unverified, no-deposit clients with no upgrades before analysis. */
+  rejectBadReputation: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -103,6 +109,9 @@ function rowToSettings(row: {
   capDate: string | null;
   paused: number;
   consecutiveErrors: number;
+  rejectStaleJobs: number;
+  rejectIgnoredCountries: number;
+  rejectBadReputation: number;
   createdAt: string;
   updatedAt: string;
 }): AutomationSettings {
@@ -120,6 +129,9 @@ function rowToSettings(row: {
     capDate: row.capDate,
     paused: row.paused === 1,
     consecutiveErrors: row.consecutiveErrors ?? 0,
+    rejectStaleJobs: (row.rejectStaleJobs ?? 1) === 1,
+    rejectIgnoredCountries: (row.rejectIgnoredCountries ?? 1) === 1,
+    rejectBadReputation: (row.rejectBadReputation ?? 1) === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -182,6 +194,9 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
         capDate: new Date().toISOString().slice(0, 10),
         paused: false,
         consecutiveErrors: 0,
+        rejectStaleJobs: true,
+        rejectIgnoredCountries: true,
+        rejectBadReputation: true,
         createdAt: now,
         updatedAt: now,
       };
@@ -202,6 +217,9 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
           capDate: defaults.capDate,
           paused: defaults.paused ? 1 : 0,
           consecutiveErrors: 0,
+          rejectStaleJobs: defaults.rejectStaleJobs ? 1 : 0,
+          rejectIgnoredCountries: defaults.rejectIgnoredCountries ? 1 : 0,
+          rejectBadReputation: defaults.rejectBadReputation ? 1 : 0,
           createdAt: now,
           updatedAt: now,
         })
@@ -882,6 +900,7 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
       keywords: profile.wants.length > 0 ? profile.wants : undefined,
       limit: 20,
       ignoredCountries: profile.ignoredCountries,
+      userId,
     };
 
     const foundJobs = await searchJobs(searchFilters);
