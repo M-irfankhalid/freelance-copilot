@@ -122,6 +122,19 @@ function ensureSchema(db: Database.Database): void {
     }
   }
 
+  // Backfill freelancer_bid_id on user_bids. Nullable, so existing rows simply
+  // have no platform bid id until the user supplies one in the Update bid
+  // dialog; nothing to backfill.
+  const bidCols = db
+    .prepare("PRAGMA table_info(user_bids)")
+    .all() as Array<{ name: string }>;
+  if (bidCols.length > 0) {
+    const bidColNames = new Set(bidCols.map((c) => c.name));
+    if (!bidColNames.has("freelancer_bid_id")) {
+      db.exec("ALTER TABLE user_bids ADD COLUMN freelancer_bid_id INTEGER");
+    }
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS logs (
       id TEXT PRIMARY KEY,
@@ -258,6 +271,7 @@ function ensureSchema(db: Database.Database): void {
       user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
       project_id INTEGER NOT NULL,
       proposal_id TEXT REFERENCES proposals (id) ON DELETE SET NULL,
+      freelancer_bid_id INTEGER,
       job_title TEXT NOT NULL,
       client TEXT NOT NULL,
       amount INTEGER NOT NULL,

@@ -22,6 +22,7 @@ import {
   type JobDetailData,
   type StoredAnalysis,
   type CompetitionSummary,
+  type MyBid,
   FreelancerApiClient,
   deriveSkillIds,
   splitParagraphs,
@@ -604,7 +605,10 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
   return summaries;
 }
 
-export async function getJobById(projectId: number): Promise<JobDetailResponse> {
+export async function getJobById(
+  projectId: number,
+  userId?: string
+): Promise<JobDetailResponse> {
   const existing = getDb()
     .select()
     .from(jobsTable)
@@ -692,11 +696,35 @@ export async function getJobById(projectId: number): Promise<JobDetailResponse> 
     {
       rejectionReason: refreshed.rejectionReason ?? null,
       bidError: refreshed.autoBidError ?? null,
+      myBid: userId !== undefined ? findMyBid(userId, projectId) : null,
     }
   );
 }
 
-export async function getJobByUrl(url: string): Promise<JobDetailResponse> {
+/**
+ * The user's own bid on a project, newest first. Read here rather than through
+ * `bids.service` because that module already depends on this one, and a shared
+ * helper would close an import cycle.
+ */
+function findMyBid(userId: string, projectId: number): MyBid | null {
+  const row = getDb()
+    .select()
+    .from(userBids)
+    .where(and(eq(userBids.userId, userId), eq(userBids.projectId, projectId)))
+    .orderBy(desc(userBids.submittedAt))
+    .get();
+
+  if (row === undefined) return null;
+  return {
+    id: row.id,
+    freelancerBidId: row.freelancerBidId ?? null,
+    amount: row.amount,
+    milestonePercentage: row.milestonePercentage,
+    description: row.description,
+  };
+}
+
+export async function getJobByUrl(url: string, userId?: string): Promise<JobDetailResponse> {
   const token = requireFreelancerToken();
   const client = new FreelancerApiClient(token);
 
@@ -751,7 +779,7 @@ export async function getJobByUrl(url: string): Promise<JobDetailResponse> {
     log.info(`Stored manually added job job-${project.id}: ${project.title}`);
   }
 
-  return getJobById(project.id);
+  return getJobById(project.id, userId);
 }
 
 /**

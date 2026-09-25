@@ -8,6 +8,7 @@ import {
   listCredentials,
   saveCredential,
   setModel,
+  testJevEngine,
   testStored,
   testUnsaved,
 } from "./credentials.service.js";
@@ -30,8 +31,8 @@ credentialsRouter.get("/", (_req, res) => {
 });
 
 /** Select the OpenRouter models. Two roles — analysis (cheap/fast) and
- *  proposal (strong). The legacy single `modelId` field still works and
- *  applies to both. */
+ *  proposal (strong) — plus the engine behind the relevance gate. The legacy
+ *  single `modelId` field still works and applies to both roles. */
 credentialsRouter.put("/openrouter/model", (req, res, next) => {
   try {
     const input = parseBody(
@@ -40,18 +41,31 @@ credentialsRouter.put("/openrouter/model", (req, res, next) => {
           modelId: z.string().min(1).max(200).optional(),
           analysisModelId: z.string().min(1).max(200).optional(),
           proposalModelId: z.string().min(1).max(200).optional(),
+          analysisEngine: z.enum(["llm", "jev"]).optional(),
+          jevModelId: z.string().min(1).max(200).optional(),
         })
         .refine(
           (d) =>
             d.modelId !== undefined ||
             d.analysisModelId !== undefined ||
-            d.proposalModelId !== undefined,
-          { message: "Provide at least one model" }
+            d.proposalModelId !== undefined ||
+            d.analysisEngine !== undefined ||
+            d.jevModelId !== undefined,
+          { message: "Provide at least one setting" }
         ),
       req.body
     );
     setModel(input);
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Verify the Jev decision engine with the stored key and Jev model. */
+credentialsRouter.post("/openrouter/test-jev", async (_req, res, next) => {
+  try {
+    res.json({ result: await testJevEngine() });
   } catch (error) {
     next(error);
   }

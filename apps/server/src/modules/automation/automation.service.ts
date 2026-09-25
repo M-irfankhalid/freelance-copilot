@@ -23,6 +23,7 @@ import { generateProposal } from "../proposals/proposals.service.js";
 import { sendDiscordEvent } from "../discord/discord.service.js";
 import {
   splitParagraphs,
+  readBidId,
   type FreelancerProject,
   type JobSearchFilters,
 } from "../jobs/jobs.client.js";
@@ -518,7 +519,9 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
       const bidderId = await getBidderId();
       const client = getFreelancerClient();
 
-      await client.placeBid(
+      // Keep the response: it carries Freelancer's own bid id, which is what a
+      // later update is sent against.
+      const placed = await client.placeBid(
         job.projectId,
         bidderId,
         bidAmount,
@@ -526,6 +529,12 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
         DEFAULT_MILESTONE_PERCENTAGE,
         proposal.content
       );
+      const freelancerBidId = readBidId(placed);
+      if (freelancerBidId === null) {
+        log.warn(
+          `Auto-bid placed on project ${job.projectId} but Freelancer.com returned no bid id — it can only be updated if the id is entered by hand`
+        );
+      }
 
       // Record the auto-bid
       const now = new Date().toISOString();
@@ -538,6 +547,7 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
           userId,
           projectId: job.projectId,
           proposalId: proposal.id,
+          freelancerBidId,
           jobTitle: proposal.jobTitle,
           client: proposal.client,
           amount: bidAmount,

@@ -22,6 +22,9 @@ let cookie: string | null = null;
 let realFetch: typeof fetch;
 
 const PROJECT_ID = 400001;
+/** A second job, seeded with no bid rows — exercises the update path for a bid
+ *  this app never placed. */
+const UNBID_PROJECT_ID = 400002;
 
 const projectDetail = {
   id: PROJECT_ID,
@@ -63,8 +66,39 @@ const bidPostResponse = {
   result: { bid_id: 999999 },
 };
 
-/** Set up stubs that return a fixed bid response from the Freelancer.com bids endpoint. */
-function stubFetch() {
+/** The bid id Freelancer.com reports back, and what a stubbed update targets. */
+const FREELANCER_BID_ID = 999999;
+
+/** Our own bidder id, as the stubbed /self response reports it. */
+const BIDDER_ID = 77124963;
+
+/** One bid on a project, in the shape the project-bids endpoint returns. */
+const projectBid = {
+  id: 4242,
+  bidder: { id: BIDDER_ID, username: "owner_user" },
+  amount: 1300,
+  description: "A bid placed outside the app.",
+};
+
+/** Every upstream call the stub saw, so a test can prove what did not happen. */
+interface StubCalls {
+  placed: number;
+  updated: Array<{ url: string; method: string; body: unknown }>;
+  projectBids: number;
+}
+
+/**
+ * Stub the Freelancer.com endpoints used by the bids flow.
+ *
+ * Call counts are returned because several tests assert that something was NOT
+ * called — when a request is expected to fail, a throw at that point would look
+ * the same as a call that never happened, so the count is the only honest check.
+ */
+function stubFetch(options: {
+  projectBids?: unknown[];
+  updateStatus?: number;
+} = {}): StubCalls {
+  const calls: StubCalls = { placed: 0, updated: [], projectBids: 0 };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -76,15 +110,62 @@ function stubFetch() {
         return new Response(JSON.stringify(selfResponse), { status: 200 });
       }
 
+      // PUT /bids/{id}/ — update an existing bid. Matched before the POST
+      // branch below, whose `includes` would also match this URL.
+      if (/freelancer\.com\/api\/projects\/0\.1\/bids\/\d+\//.test(url)) {
+        calls.updated.push({
+          url,
+          method: init?.method ?? "GET",
+          body: JSON.parse(String(init?.body ?? "null")) as unknown,
+        });
+        const status = options.updateStatus ?? 200;
+        if (status !== 200) {
+          return new Response(
+            JSON.stringify({ status: "error", error: { message: "Bid not found" } }),
+            { status }
+          );
+        }
+        return new Response(JSON.stringify({ status: "success", result: {} }), {
+          status: 200,
+        });
+      }
+
+      // GET /projects/{id}/bids/ — the user-clicked Find lookup.
+      if (
+        /freelancer\.com\/api\/projects\/0\.1\/projects\/\d+\/bids\//.test(url) &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        calls.projectBids++;
+        return new Response(
+          JSON.stringify({ status: "success", result: { bids: options.projectBids ?? [] } }),
+          { status: 200 }
+        );
+      }
+
       // POST /bids
       if (url.includes("freelancer.com/api/projects/0.1/bids") && init?.method === "POST") {
+        calls.placed++;
         return new Response(JSON.stringify(bidPostResponse), { status: 200 });
+      }
+
+      // GET /projects/{id} — the job detail view re-reads the project from
+      // Freelancer rather than trusting the stored copy.
+      const projectMatch = /freelancer\.com\/api\/projects\/0\.1\/projects\/(\d+)(?:\?|$)/.exec(url);
+      if (projectMatch !== null) {
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            result: { ...projectDetail, id: Number(projectMatch[1]) },
+          }),
+          { status: 200 }
+        );
       }
 
       // Fallback for anything unexpected.
       return new Response("not found", { status: 404 });
     })
   );
+  return calls;
 }
 
 beforeAll(async () => {
@@ -177,6 +258,33 @@ beforeAll(async () => {
         competitorNote: "3 bids so far.",
       }),
       rawData: JSON.stringify({ ...projectDetail, description: projectDetail.description }),
+      lastAnalyzedAt: jobNow,
+      ignoredAt: null,
+      importedAt: jobNow,
+      updatedAt: jobNow,
+    })
+    .run();
+
+  // A second job with no bids against it. Nothing in this suite places a bid on
+  // it, so updating here covers a bid the app never placed.
+  getDb()
+    .insert(jobs)
+    .values({
+      id: `job-${UNBID_PROJECT_ID}`,
+      projectId: UNBID_PROJECT_ID,
+      title: "Migrate a legacy PHP site to Node",
+      client: "Client in Ireland",
+      clientCountry: "Ireland",
+      budgetLabel: "$1000 – $3000",
+      skills: "[]",
+      postedLabel: "3h ago",
+      bidCount: 0,
+      avgBidLabel: "—",
+      matchScore: 85,
+      severity: "fair",
+      status: "analyzed",
+      analysis: null,
+      rawData: JSON.stringify({ ...projectDetail, id: UNBID_PROJECT_ID, bidperiod: 10 }),
       lastAnalyzedAt: jobNow,
       ignoredAt: null,
       importedAt: jobNow,
@@ -412,6 +520,271 @@ describe("bids", () => {
       const { bids: wonBids } = (await wonRes.json()) as { bids: Array<{ id: string; outcome: string }> };
       expect(wonBids.length).toBe(1);
       expect(wonBids[0]!.outcome).toBe("won");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("update bid", () => {
+  it("requires authentication", async () => {
+    const update = await realFetch(`${baseUrl}/api/bids/project/${PROJECT_ID}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        freelancerBidId: FREELANCER_BID_ID,
+        description: "x",
+        amount: 100,
+        milestonePercentage: 50,
+      }),
+    });
+    expect(update.status).toBe(401);
+
+    const find = await realFetch(`${baseUrl}/api/bids/project/${PROJECT_ID}/find`);
+    expect(find.status).toBe(401);
+  });
+
+  it("captures Freelancer's bid id when a bid is placed", async () => {
+    const calls = stubFetch();
+    try {
+      // A third proposal on the shared project, so this test owns its bid.
+      const genRes = await realFetch(`${baseUrl}/api/proposals`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-capture`,
+          projectId: PROJECT_ID,
+          jobTitle: "Bid id capture test",
+          client: "Client Capture",
+          content: "I can deliver this project.",
+          bidAmount: 1100,
+        }),
+      });
+      const { proposal } = (await genRes.json()) as { proposal: { id: string } };
+      await realFetch(`${baseUrl}/api/proposals/${proposal.id}/status`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "approved" }),
+      });
+
+      const bidRes = await realFetch(`${baseUrl}/api/bids`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          amount: 1100,
+          period: 7,
+          milestonePercentage: 50,
+        }),
+      });
+      expect(bidRes.status).toBe(201);
+      expect(calls.placed).toBe(1);
+
+      // The id comes back from the response, not from anything we made up.
+      const { bid } = (await bidRes.json()) as { bid: { freelancerBidId: number | null } };
+      expect(bid.freelancerBidId).toBe(FREELANCER_BID_ID);
+
+      const listRes = await realFetch(`${baseUrl}/api/bids`, { headers: authed() });
+      const { bids } = (await listRes.json()) as {
+        bids: Array<{ freelancerBidId: number | null }>;
+      };
+      expect(bids.map((b) => b.freelancerBidId)).toContain(FREELANCER_BID_ID);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("updates the bid on Freelancer.com and keeps the local record in step", async () => {
+    const calls = stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/bids/project/${PROJECT_ID}`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          freelancerBidId: FREELANCER_BID_ID,
+          description: "Revised: I can start on Monday.",
+          amount: 1750,
+          milestonePercentage: 40,
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      // The request went to Freelancer's own bid, by id, as a PUT.
+      expect(calls.updated).toHaveLength(1);
+      const call = calls.updated[0]!;
+      expect(call.method).toBe("PUT");
+      expect(call.url).toContain(`/projects/0.1/bids/${FREELANCER_BID_ID}/`);
+
+      // The endpoint takes snake_case; our API takes camelCase. Translating
+      // between them is the easiest thing to get wrong here.
+      const body = call.body as Record<string, unknown>;
+      expect(body["milestone_percentage"]).toBe(40);
+      expect(body["milestonePercentage"]).toBeUndefined();
+      expect(body["description"]).toBe("Revised: I can start on Monday.");
+      expect(body["amount"]).toBe(1750);
+      // The endpoint does not accept a period; sending one would be invented data.
+      expect(body["period"]).toBeUndefined();
+
+      const { bid } = (await res.json()) as {
+        bid: {
+          amount: number;
+          milestonePercentage: number;
+          description: string;
+          freelancerBidId: number;
+        };
+      };
+      expect(bid.amount).toBe(1750);
+      expect(bid.milestonePercentage).toBe(40);
+      expect(bid.description).toBe("Revised: I can start on Monday.");
+      expect(bid.freelancerBidId).toBe(FREELANCER_BID_ID);
+
+      // No lookup was made on the user's behalf: the id was already known.
+      expect(calls.projectBids).toBe(0);
+
+      // The job page prefills from the stored bid, so it must reflect the edit.
+      const jobRes = await realFetch(`${baseUrl}/api/jobs/${PROJECT_ID}`, { headers: authed() });
+      const { job } = (await jobRes.json()) as {
+        job: { myBid: { freelancerBidId: number | null; amount: number } | null };
+      };
+      expect(job.myBid?.freelancerBidId).toBe(FREELANCER_BID_ID);
+      expect(job.myBid?.amount).toBe(1750);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("records a bid the app never placed", async () => {
+    const calls = stubFetch();
+    try {
+      // Nothing in this suite bid on UNBID_PROJECT_ID, so there is no row yet.
+      const res = await realFetch(`${baseUrl}/api/bids/project/${UNBID_PROJECT_ID}`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          freelancerBidId: 555001,
+          description: "Bid placed by hand on Freelancer.com.",
+          amount: 2400,
+          milestonePercentage: 30,
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(calls.updated).toHaveLength(1);
+
+      // It is remembered, with the id, so the next update needs no typing.
+      const jobRes = await realFetch(`${baseUrl}/api/jobs/${UNBID_PROJECT_ID}`, {
+        headers: authed(),
+      });
+      const { job } = (await jobRes.json()) as {
+        job: {
+          myBid: { freelancerBidId: number | null; amount: number; description: string } | null;
+        };
+      };
+      expect(job.myBid?.freelancerBidId).toBe(555001);
+      expect(job.myBid?.amount).toBe(2400);
+      expect(job.myBid?.description).toBe("Bid placed by hand on Freelancer.com.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails loudly on a bid id Freelancer.com does not know, saving nothing", async () => {
+    const calls = stubFetch({ updateStatus: 404 });
+    try {
+      const before = await realFetch(`${baseUrl}/api/jobs/${UNBID_PROJECT_ID}`, {
+        headers: authed(),
+      });
+      const beforeBody = (await before.json()) as { job: { myBid: { amount: number } | null } };
+      // The read has to have actually landed, or both sides below would be
+      // undefined and the comparison would pass for the wrong reason.
+      expect(typeof beforeBody.job.myBid?.amount).toBe("number");
+
+      const res = await realFetch(`${baseUrl}/api/bids/project/${UNBID_PROJECT_ID}`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          freelancerBidId: 987654,
+          description: "This should never be stored.",
+          amount: 9999,
+          milestonePercentage: 50,
+        }),
+      });
+      expect(res.status).toBe(404);
+      const errBody = (await res.json()) as { error: { code: string; message: string } };
+      expect(errBody.error.code).toBe("NOT_FOUND");
+      // The upstream message is surfaced, not swallowed into a bare status.
+      expect(errBody.error.message).toMatch(/no bid with id 987654/);
+
+      // The attempt reached Freelancer — a throw before the call would look the
+      // same from the response alone.
+      expect(calls.updated).toHaveLength(1);
+
+      const after = await realFetch(`${baseUrl}/api/jobs/${UNBID_PROJECT_ID}`, {
+        headers: authed(),
+      });
+      const afterBody = (await after.json()) as { job: { myBid: { amount: number } | null } };
+      expect(afterBody.job.myBid?.amount).toBe(beforeBody.job.myBid?.amount);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects an out-of-range milestone before calling Freelancer", async () => {
+    const calls = stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/bids/project/${UNBID_PROJECT_ID}`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          freelancerBidId: 555001,
+          description: "Milestone out of range.",
+          amount: 2400,
+          milestonePercentage: 10,
+        }),
+      });
+      expect(res.status).toBe(400);
+      const errBody = (await res.json()) as { error: { code: string } };
+      expect(errBody.error.code).toBe("VALIDATION_ERROR");
+      expect(calls.updated).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("finds the user's own bid only when the user asks", async () => {
+    const calls = stubFetch({ projectBids: [projectBid] });
+    try {
+      const res = await realFetch(`${baseUrl}/api/bids/project/${PROJECT_ID}/find`, {
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const { bid } = (await res.json()) as {
+        bid: { id: number; amount: number | null; description: string | null } | null;
+      };
+      expect(bid?.id).toBe(4242);
+      expect(bid?.amount).toBe(1300);
+      expect(bid?.description).toBe("A bid placed outside the app.");
+      // Exactly one lookup, and only because Find was pressed.
+      expect(calls.projectBids).toBe(1);
+      // Finding is not the same as updating.
+      expect(calls.updated).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reports plainly when no bid of the user's is on the project", async () => {
+    // A project whose bids all belong to somebody else.
+    const calls = stubFetch({
+      projectBids: [{ id: 4243, bidder: { id: 1 }, amount: 900 }],
+    });
+    try {
+      const res = await realFetch(`${baseUrl}/api/bids/project/${PROJECT_ID}/find`, {
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const { bid } = (await res.json()) as { bid: unknown };
+      expect(bid).toBeNull();
+      expect(calls.projectBids).toBe(1);
     } finally {
       vi.unstubAllGlobals();
     }

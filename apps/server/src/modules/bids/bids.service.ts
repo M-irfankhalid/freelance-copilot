@@ -9,8 +9,17 @@ import {
   userBids,
 } from "../../db/schema.js";
 import { getBidderId, getFreelancerClient } from "../jobs/jobs.service.js";
+import { readBidId } from "../jobs/jobs.client.js";
+import { saveProposal } from "../proposals/proposals.service.js";
 
 const log = createLogger("bid");
+
+/**
+ * Bid period recorded for a bid the app did not place. Freelancer's update
+ * endpoint takes no period, so this is bookkeeping to satisfy the column —
+ * nothing is sent upstream with it.
+ */
+const ASSUMED_BID_PERIOD_DAYS = 7;
 
 export type BidStatus = "pending" | "submitted" | "accepted" | "rejected" | "cancelled";
 
@@ -23,6 +32,8 @@ export interface UserBid {
   userId: string;
   projectId: number;
   proposalId: string | null;
+  /** Freelancer.com's bid id, when known — the handle an update is sent against. */
+  freelancerBidId: number | null;
   jobTitle: string;
   client: string;
   amount: number;
@@ -43,6 +54,7 @@ export interface BidResponse {
   amount: number;
   period: number;
   milestonePercentage: number;
+  freelancerBidId: number | null;
   status: BidStatus;
   outcome: BidOutcome | null;
   via: BidVia;
@@ -93,9 +105,13 @@ export async function placeBid(
   const bidderId = await getBidderId();
   const client = getFreelancerClient();
 
-  // Place the bid on Freelancer.com
+  // Place the bid on Freelancer.com, keeping the response: it carries the
+  // platform's own bid id, which is what a later update is sent against.
+  // No initialiser: every path out of the catch below throws, so the only way
+  // past this block is the try assigning it.
+  let freelancerBidId: number | null;
   try {
-    await client.placeBid(
+    const placed = await client.placeBid(
       proposal.projectId,
       bidderId,
       amount,
@@ -103,6 +119,13 @@ export async function placeBid(
       milestonePercentage,
       proposal.content
     );
+    freelancerBidId = readBidId(placed);
+    if (freelancerBidId === null) {
+      log.warn(
+        `Bid placed on project ${proposal.projectId} but Freelancer.com returned no bid id — it can only be updated if the id is entered by hand`,
+        { jobTitle: proposal.jobTitle }
+      );
+    }
   } catch (error) {
     if (error instanceof AppError) {
       if (error.code === "BID_REJECTED") {
@@ -128,6 +151,7 @@ export async function placeBid(
       userId,
       projectId: proposal.projectId,
       proposalId: proposal.id,
+      freelancerBidId,
       jobTitle: proposal.jobTitle,
       client: proposal.client,
       amount,
@@ -149,6 +173,7 @@ export async function placeBid(
     userId,
     projectId: proposal.projectId,
     proposalId: proposal.id,
+    freelancerBidId,
     jobTitle: proposal.jobTitle,
     client: proposal.client,
     amount,
@@ -201,6 +226,7 @@ export async function listBids(userId: string, outcomeFilter?: BidOutcome): Prom
         amount: row.amount,
         period: row.period,
         milestonePercentage: row.milestonePercentage,
+        freelancerBidId: row.freelancerBidId ?? null,
         status: row.status as BidStatus,
         outcome: row.outcome as BidOutcome | null,
         via: row.via as BidVia,
@@ -236,6 +262,7 @@ export async function getBid(userId: string, bidId: string): Promise<UserBid | n
       userId: row.userId,
       projectId: row.projectId,
       proposalId: row.proposalId,
+      freelancerBidId: row.freelancerBidId ?? null,
       jobTitle: row.jobTitle,
       client: row.client,
       amount: row.amount,
@@ -296,5 +323,237 @@ export async function updateBidOutcome(
       "DATABASE_ERROR",
       `Failed to update bid outcome: ${error instanceof Error ? error.message : "Unknown error"}`
     );
+  }
+}
+
+export interface ReviseBidInput {
+  /** Freelancer.com's bid id — the bid being updated. */
+  freelancerBidId: number;
+  description: string;
+  amount: number;
+  milestonePercentage: number;
+}
+
+export interface FoundBid {
+  id: number;
+  amount: number | null;
+  description: string | null;
+}
+
+/**
+ * Ask Freelancer.com for the user's own bid on a project.
+ *
+ * Called only from the Update bid dialog's Find button. Nothing here runs on
+ * page load or dialog open: the `bidders[]` filter is one more upstream call,
+ * and the user asked for it to be their choice rather than an automatic one.
+ */
+export async function findMyBidOnFreelancer(
+  projectId: number
+): Promise<FoundBid | null> {
+  const bidderId = await getBidderId();
+  const client = getFreelancerClient();
+  const bids = await client.getBidsForProject(projectId, 10, bidderId);
+
+  const mine = bids.find(
+    (bid) => bid.bidder?.id === bidderId && typeof bid.id === "number"
+  );
+  if (mine === undefined || typeof mine.id !== "number") return null;
+
+  return {
+    id: mine.id,
+    amount: typeof mine.amount === "number" ? mine.amount : null,
+    description: typeof mine.description === "string" ? mine.description : null,
+  };
+}
+
+/**
+ * Revise a bid already on Freelancer.com.
+ *
+ * The upstream call happens first and the local record only follows it: if
+ * Freelancer rejects the change, nothing here should suggest it took effect.
+ *
+ * A bid we have no row for (placed outside the app, with the id typed in by
+ * hand) is recorded once the update lands, so it shows on the Bids page and the
+ * id is remembered. Its `submittedAt` is when it was first recorded here, not
+ * the true submission time, which the app has no way to know.
+ */
+export async function reviseBid(
+  userId: string,
+  projectId: number,
+  input: ReviseBidInput
+): Promise<UserBid> {
+  const job = getDb()
+    .select()
+    .from(jobsTable)
+    .where(eq(jobsTable.projectId, projectId))
+    .get();
+
+  if (!job) {
+    throw notFound(`Job with project ID ${projectId} not found`);
+  }
+
+  const client = getFreelancerClient();
+  try {
+    await client.updateBid(input.freelancerBidId, {
+      description: input.description,
+      amount: input.amount,
+      milestonePercentage: input.milestonePercentage,
+    });
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      502,
+      "UPSTREAM_ERROR",
+      `Failed to update bid: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const existing = getDb()
+    .select()
+    .from(userBids)
+    .where(and(eq(userBids.userId, userId), eq(userBids.projectId, projectId)))
+    .orderBy(desc(userBids.submittedAt))
+    .get();
+
+  let bid: UserBid;
+  if (existing !== undefined) {
+    getDb()
+      .update(userBids)
+      .set({
+        // Recorded now if it was missing, so the next update needs no typing.
+        freelancerBidId: input.freelancerBidId,
+        description: input.description,
+        amount: input.amount,
+        milestonePercentage: input.milestonePercentage,
+        updatedAt: now,
+      })
+      .where(eq(userBids.id, existing.id))
+      .run();
+
+    bid = {
+      id: existing.id,
+      userId: existing.userId,
+      projectId: existing.projectId,
+      proposalId: existing.proposalId,
+      freelancerBidId: input.freelancerBidId,
+      jobTitle: existing.jobTitle,
+      client: existing.client,
+      amount: input.amount,
+      period: existing.period,
+      milestonePercentage: input.milestonePercentage,
+      description: input.description,
+      status: existing.status as BidStatus,
+      outcome: existing.outcome as BidOutcome | null,
+      via: existing.via as BidVia,
+      submittedAt: existing.submittedAt,
+      updatedAt: now,
+    };
+    log.info(
+      `Revised bid ${existing.id} (Freelancer bid ${input.freelancerBidId}) on project ${projectId}`
+    );
+  } else {
+    const id = `bid-${projectId}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const period = readBidPeriod(job.rawData) ?? ASSUMED_BID_PERIOD_DAYS;
+
+    getDb()
+      .insert(userBids)
+      .values({
+        id,
+        userId,
+        projectId,
+        proposalId: null,
+        freelancerBidId: input.freelancerBidId,
+        jobTitle: job.title,
+        client: job.client,
+        amount: input.amount,
+        period,
+        milestonePercentage: input.milestonePercentage,
+        description: input.description,
+        status: "submitted",
+        outcome: "in_review",
+        via: "manual",
+        submittedAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    bid = {
+      id,
+      userId,
+      projectId,
+      proposalId: null,
+      freelancerBidId: input.freelancerBidId,
+      jobTitle: job.title,
+      client: job.client,
+      amount: input.amount,
+      period,
+      milestonePercentage: input.milestonePercentage,
+      description: input.description,
+      status: "submitted",
+      outcome: "in_review",
+      via: "manual",
+      submittedAt: now,
+      updatedAt: now,
+    };
+    log.info(
+      `Recorded bid ${id} (Freelancer bid ${input.freelancerBidId}) for project ${projectId} — updated but not placed by this app`
+    );
+  }
+
+  syncProposalAfterRevision(userId, projectId, bid.proposalId, input);
+
+  return bid;
+}
+
+/**
+ * Keep the local proposal in step with the bid that was just edited, so the job
+ * page's proposal box does not show text the client never received. Best effort:
+ * the upstream bid is already updated, and a missing or deleted proposal must
+ * not turn a successful revision into a failure.
+ */
+function syncProposalAfterRevision(
+  userId: string,
+  projectId: number,
+  proposalId: string | null,
+  input: ReviseBidInput
+): void {
+  let target = proposalId;
+  if (target === null) {
+    const forJob = getDb()
+      .select({ id: proposalsTable.id })
+      .from(proposalsTable)
+      .where(
+        and(
+          eq(proposalsTable.userId, userId),
+          eq(proposalsTable.jobId, `job-${projectId}`)
+        )
+      )
+      .get();
+    target = forJob?.id ?? null;
+  }
+  if (target === null) return;
+
+  void saveProposal(userId, target, input.description, input.amount).catch(
+    (error: unknown) => {
+      log.warn(
+        `Bid updated on Freelancer.com but proposal ${target} could not be synced: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  );
+}
+
+/** The project's own bid period from the stored raw response, when present. */
+function readBidPeriod(rawData: string | null): number | null {
+  if (rawData === null) return null;
+  try {
+    const parsed = JSON.parse(rawData) as { bidperiod?: unknown };
+    return typeof parsed.bidperiod === "number" && parsed.bidperiod > 0
+      ? parsed.bidperiod
+      : null;
+  } catch {
+    return null;
   }
 }

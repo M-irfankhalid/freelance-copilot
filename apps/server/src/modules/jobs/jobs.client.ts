@@ -216,11 +216,44 @@ export interface FreelancerSelf {
   email?: string | { email: string; verified: boolean };
 }
 
-/** Response shape from POST /bids. */
+/**
+ * Response shape from POST /bids and PUT /bids/{id}/.
+ *
+ * Freelancer's own convention nests the payload under `result`, but the flat
+ * `bid_id` is tolerated too — `readBidId` reads whichever is present rather than
+ * assuming, because a bid stored without its platform id cannot be updated
+ * later and that failure would be silent.
+ */
 export interface FreelancerBidResponse {
   bid_id?: number;
   message?: string;
+  result?: { bid_id?: number; id?: number; [key: string]: unknown };
+  error?: { message?: string; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+/**
+ * Pull the platform bid id out of a place-bid response. Returns null when the
+ * response carries no usable id, so the caller can record a bid that cannot yet
+ * be updated instead of losing the bid entirely.
+ */
+export function readBidId(body: FreelancerBidResponse): number | null {
+  const candidates = [body.result?.bid_id, body.result?.id, body.bid_id];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate > 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/** The upstream error message from a failed bid request, when it sent one. */
+function upstreamMessage(body: FreelancerBidResponse, status: number): string {
+  return (
+    body.error?.message ??
+    body.message ??
+    `Freelancer.com responded with status ${status}`
+  );
 }
 
 export interface JobSearchFilters {
@@ -274,6 +307,17 @@ export interface CompetitionSummary {
   isCheapest: boolean;
 }
 
+/** The user's own bid on a project, as stored in `user_bids`. */
+export interface MyBid {
+  /** The app's internal bid id (`bid-{projectId}-{timestamp}`). */
+  id: string;
+  /** Freelancer.com's bid id — what an update is sent against. Null when unrecorded. */
+  freelancerBidId: number | null;
+  amount: number;
+  milestonePercentage: number;
+  description: string;
+}
+
 export interface JobDetailData {
   id: string;
   projectId: number;
@@ -292,6 +336,12 @@ export interface JobDetailData {
   rejectionReason?: string | null;
   /** Error from the last failed automatic bid attempt, if any. */
   bidError?: string | null;
+  /**
+   * The user's own bid on this project, when one is on record. Drives the
+   * Update bid dialog, which prefills from it. Null when the user has not bid
+   * through the app — the dialog still opens, and they supply the bid id.
+   */
+  myBid?: MyBid | null;
   description: string[];
   clientInfo: {
     name: string;
@@ -512,12 +562,19 @@ export class FreelancerApiClient {
   /**
    * Fetch the list of bids on a project. Returns typed bids; callers format
    * what they need. Endpoint shape: `result: { bids: Bid[] }`.
+   *
+   * `bidderId` adds Freelancer's `bidders[]` filter, which is how the Update
+   * bid dialog's Find button locates the user's own bid on a project. Passed
+   * only on that explicit request — the competition-insight call in
+   * `getJobById` wants every bidder.
    */
   async getBidsForProject(
     projectId: number,
-    limit = 10
+    limit = 10,
+    bidderId?: number
   ): Promise<FreelancerBid[]> {
-    const url = `${this.baseUrl}/projects/${projectId}/bids/?limit=${limit}`;
+    const filter = bidderId !== undefined ? `&bidders[]=${bidderId}` : "";
+    const url = `${this.baseUrl}/projects/${projectId}/bids/?limit=${limit}${filter}`;
 
     let response: Response;
     try {
@@ -639,9 +696,14 @@ export class FreelancerApiClient {
     storedStatus: "new" | "analyzed" | "ignored",
     storedMatchScore: number | null,
     competition: CompetitionSummary | null,
-    storedState: { rejectionReason: string | null; bidError: string | null } = {
+    storedState: {
+      rejectionReason: string | null;
+      bidError: string | null;
+      myBid?: MyBid | null;
+    } = {
       rejectionReason: null,
       bidError: null,
+      myBid: null,
     }
   ): JobDetailData {
     const summary = this.mapToJobSummary(project, postedLabel);
@@ -671,6 +733,7 @@ export class FreelancerApiClient {
       matchScore: storedMatchScore ?? undefined,
       rejectionReason: storedState.rejectionReason ?? null,
       bidError: storedState.bidError ?? null,
+      myBid: storedState.myBid ?? null,
       description:
         description.length > 0
           ? description
@@ -830,8 +893,71 @@ export class FreelancerApiClient {
 
     const body = (await response.json()) as FreelancerBidResponse;
     if (!response.ok) {
-      const message = body.message ?? `Freelancer.com responded with status ${response.status}`;
-      throw new AppError(400, "BID_REJECTED", message);
+      throw new AppError(400, "BID_REJECTED", upstreamMessage(body, response.status));
+    }
+
+    this.noteRateLimit(response);
+    return body;
+  }
+
+  /**
+   * Update an existing bid.
+   * Endpoint: PUT /api/projects/0.1/bids/{bid_id}/
+   * Body: { description, amount, milestone_percentage }
+   *
+   * The body uses snake_case `milestone_percentage` while this app calls the
+   * same field `milestonePercentage`; the translation happens here and nowhere
+   * else. `period` is deliberately absent — the endpoint does not accept it.
+   */
+  async updateBid(
+    bidId: number,
+    patch: { description: string; amount: number; milestonePercentage: number }
+  ): Promise<FreelancerBidResponse> {
+    const url = `${this.baseUrl}/bids/${bidId}/`;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          ...this.authHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          description: patch.description,
+          amount: patch.amount,
+          milestone_percentage: patch.milestonePercentage,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      throw new AppError(
+        502,
+        "UPSTREAM_ERROR",
+        `Failed to reach Freelancer.com: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new AppError(401, "UNAUTHORIZED", "Freelancer.com token was rejected or expired");
+    }
+    if (response.status === 429) {
+      throw new AppError(429, "RATE_LIMITED", "Freelancer.com rate limit exceeded");
+    }
+    if (response.status === 404) {
+      throw new AppError(
+        404,
+        "NOT_FOUND",
+        `Freelancer.com has no bid with id ${bidId} — check the bid id belongs to one of your bids on this project`
+      );
+    }
+
+    const body = (await response.json().catch(() => ({}))) as FreelancerBidResponse;
+    if (!response.ok) {
+      // A rejected update is usually a bad bid id or a value Freelancer refuses
+      // (milestone outside 20-100, amount below its minimum). Pass its own
+      // wording through — it is more specific than anything we could infer.
+      throw new AppError(400, "BID_REJECTED", upstreamMessage(body, response.status));
     }
 
     this.noteRateLimit(response);

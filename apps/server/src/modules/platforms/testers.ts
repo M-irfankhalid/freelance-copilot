@@ -1,4 +1,6 @@
 import { createLogger } from "../../lib/logger.js";
+import { AppError } from "../../lib/errors.js";
+import { callJevApi, JEV_SCORE_QUESTION, readJevScore } from "../ai/jev.service.js";
 
 /**
  * Lightweight credential verification against the real services. Each tester
@@ -179,4 +181,50 @@ export async function listOpenRouterModels(
           : "",
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Verify the Jev (Decisions API) engine works for this key and model with one
+ * minimal round trip. Kept separate from the OpenRouter key test on purpose:
+ * the Decisions endpoint is alpha, so saving a key must never depend on it
+ * being reachable.
+ */
+export async function testJevAccess(
+  key: string,
+  model: string
+): Promise<TestResult> {
+  try {
+    // Deliberately the gate's own score question rather than a simpler probe:
+    // a `score` question is rejected without its ordered `criteria` array, so a
+    // probe that skipped it could report success while every real screening
+    // call failed.
+    const response = await callJevApi(
+      key,
+      model,
+      { probe: "Connectivity check from Freelance Copilot." },
+      { score: JEV_SCORE_QUESTION },
+      // Shorter than the gate's budget — this runs while the user waits.
+      15_000
+    );
+    // Reading the answer also proves it lands on the 0-100 scale the gate uses.
+    const score = readJevScore(response);
+    log.info(`Jev engine reachable (model: ${model}, probe score ${score}/100)`);
+    return { ok: true, message: `Jev is reachable with ${model}` };
+  } catch (cause) {
+    if (cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError")) {
+      return { ok: false, message: "Jev did not respond in time" };
+    }
+    if (cause instanceof AppError) {
+      if (cause.status === 401) {
+        return { ok: false, message: "Key was rejected by OpenRouter" };
+      }
+      if (cause.status === 429) {
+        return { ok: false, message: "Jev rate limit hit — try again shortly" };
+      }
+      // 404/400 here almost always means the model id is wrong or the alpha
+      // endpoint no longer accepts it, so echo what the service said.
+      return { ok: false, message: `Jev rejected the request: ${cause.message}` };
+    }
+    return { ok: false, message: "Could not reach Jev" };
+  }
 }

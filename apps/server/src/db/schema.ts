@@ -180,6 +180,13 @@ export const userBids = sqliteTable("user_bids", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   projectId: integer("project_id").notNull(),
+  /**
+   * Freelancer.com's own bid id, returned when the bid is placed. Needed to
+   * update the bid later (`PUT /bids/{bid_id}/`). Null for bids placed before
+   * the id was captured, or when the API responded without one — the Update bid
+   * dialog lets the user supply it by hand in that case.
+   */
+  freelancerBidId: integer("freelancer_bid_id"),
   /** Links to the proposal row whose text was submitted, if any. */
   proposalId: text("proposal_id").references(() => proposals.id, { onDelete: "set null" }),
   jobTitle: text("job_title").notNull(),

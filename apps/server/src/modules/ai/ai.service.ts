@@ -5,6 +5,7 @@ import { platformCredentials, userProfile } from "../../db/schema.js";
 import { eq } from "drizzle-orm";
 import { createLogger } from "../../lib/logger.js";
 import { applyRelevancyFilter } from "./relevancy.js";
+import { checkRelevancyWithJev, readAnalysisEngine } from "./jev.service.js";
 import { getProfile } from "../profile/profile.service.js";
 
 const log = createLogger("analysis");
@@ -744,13 +745,33 @@ Respond with ONLY a single valid JSON object and nothing else — no markdown, n
 }
 
 /**
- * Run the fast relevance gate (Model A) against a job. The model used is the
- * user's selected analysis model — the cheap/fast one. Output is strictly
- * validated before it is used for any decision.
+ * Run the fast relevance gate against a job. The model used is the user's
+ * selected analysis model — the cheap/fast one. Output is strictly validated
+ * before it is used for any decision.
+ *
+ * When the gate engine is set to Jev, Jev is the only engine used. The
+ * relevance model is deliberately NOT a fallback: silently re-screening on it
+ * would mean the engine actually in use is not the one configured, and a
+ * broken Jev setup would look like a working one. A Jev failure is logged and
+ * raised instead, so it is visible in Logs and on the job.
  */
 export async function checkRelevancyWithAI(
   data: RelevancyPromptData
 ): Promise<RelevancyCheck> {
+  if (readAnalysisEngine() === "jev") {
+    try {
+      return await checkRelevancyWithJev(data);
+    } catch (error) {
+      log.warn(
+        `Jev relevance gate failed — job not screened (engine is set to Jev): ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+        { jobTitle: data.jobTitle }
+      );
+      throw error;
+    }
+  }
+
   const systemPrompt =
     "You are a fast, low-cost job screener. Score whether the job is worth pursuing for the freelancer, combining how well it matches with how trustworthy the client is. Use ONLY the facts provided. Never invent facts about the user or the client.";
   const rawResponse = await callOpenRouter(

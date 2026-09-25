@@ -104,6 +104,29 @@ function authed(extra?: Record<string, string>): Record<string, string> {
   return { Cookie: cookie ?? "", ...extra };
 }
 
+/** The OpenRouter credential row as the API reports it. */
+async function openRouterSummary(): Promise<
+  | {
+      analysisModelId: string | null;
+      proposalModelId: string | null;
+      analysisEngine: string;
+      jevModelId: string | null;
+    }
+  | undefined
+> {
+  const res = await fetch(`${baseUrl}/api/credentials`, { headers: authed() });
+  const body = (await res.json()) as {
+    credentials: Array<{
+      id: string;
+      analysisModelId: string | null;
+      proposalModelId: string | null;
+      analysisEngine: string;
+      jevModelId: string | null;
+    }>;
+  };
+  return body.credentials.find((c) => c.id === "openrouter");
+}
+
 describe("credentials", () => {
   it("require an authenticated session", async () => {
     const response = await fetch(`${baseUrl}/api/credentials`);
@@ -245,6 +268,70 @@ describe("credentials", () => {
     expect(openrouter?.proposalModelId).toBe("zeta/model");
     // Legacy modelId mirrors the proposal model.
     expect(openrouter?.modelId).toBe("zeta/model");
+  });
+
+  it("default to the chat engine and persist the Jev decision engine", async () => {
+    // Absent engine means "llm", so installs saved before Jev existed behave
+    // exactly as they did.
+    const before = await openRouterSummary();
+    expect(before?.analysisEngine).toBe("llm");
+    expect(before?.jevModelId).toBeNull();
+
+    const set = await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        analysisEngine: "jev",
+        jevModelId: "typesafe/jev-1.13",
+      }),
+    });
+    expect(set.status).toBe(200);
+
+    const after = await openRouterSummary();
+    expect(after?.analysisEngine).toBe("jev");
+    expect(after?.jevModelId).toBe("typesafe/jev-1.13");
+  });
+
+  it("reject an unknown analysis engine", async () => {
+    const res = await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ analysisEngine: "gpt" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("keep every saved setting when the API key is replaced", async () => {
+    // Distinct values per role, so a dropped field is visible rather than
+    // silently equal to another.
+    await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ analysisModelId: "alpha/model" }),
+    });
+    await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ proposalModelId: "zeta/model" }),
+    });
+    await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ analysisEngine: "jev", jevModelId: "typesafe/jev-1.13" }),
+    });
+
+    const replace = await fetch(`${baseUrl}/api/credentials/openrouter`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ value: "sk-or-rotated-key-0987654321" }),
+    });
+    expect(replace.status).toBe(200);
+
+    const cred = await openRouterSummary();
+    expect(cred?.analysisModelId).toBe("alpha/model");
+    expect(cred?.proposalModelId).toBe("zeta/model");
+    expect(cred?.analysisEngine).toBe("jev");
+    expect(cred?.jevModelId).toBe("typesafe/jev-1.13");
   });
 
   it("reject unknown platforms and missing values", async () => {

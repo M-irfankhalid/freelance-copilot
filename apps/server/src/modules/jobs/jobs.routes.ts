@@ -106,7 +106,7 @@ jobsRouter.get("/:projectId", async (req, res, next) => {
         .json({ error: { code: "INVALID_ID", message: "Project id must be a positive integer" } });
       return;
     }
-    const job = await getJobByIdService(projectId);
+    const job = await getJobByIdService(projectId, req.user!.id);
     res.json({ job });
   } catch (error) {
     next(error);
@@ -120,7 +120,7 @@ jobsRouter.post("/by-url", async (req, res, next) => {
       z.object({ url: z.string().min(1).max(2000) }),
       req.body
     );
-    const job = await getJobUrlService(input.url);
+    const job = await getJobUrlService(input.url, req.user!.id);
     res.json({ job });
   } catch (error) {
     next(error);

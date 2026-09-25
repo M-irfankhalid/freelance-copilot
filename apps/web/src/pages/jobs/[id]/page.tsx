@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft, Bot, CircleCheck, Clock, Eye, FileText, Globe,
-  RefreshCw, Send, Sparkles, ThumbsDown, TriangleAlert, Users,
+  Pencil, RefreshCw, Send, Sparkles, ThumbsDown, TriangleAlert, Users,
 } from "lucide-react";
 
 import { ScoreChip } from "@/components/shared/badges";
@@ -24,6 +24,10 @@ import { api, ApiError, NetworkError } from "@/lib/api/client";
 import { useApi } from "@/lib/api/hooks";
 import type { JobDetailData } from "@/lib/types";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  UpdateBidDialog,
+  type UpdateBidValues,
+} from "@/components/jobs/update-bid-dialog";
 
 interface JobDetailResponse {
   job: JobDetailData;
@@ -61,6 +65,7 @@ export default function JobDetailPage() {
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [placingBid, setPlacingBid] = useState(false);
   const [bidError, setBidError] = useState<string | null>(null);
+  const [updateBidOpen, setUpdateBidOpen] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [ignored, setIgnored] = useState(false);
   const [ignoreError, setIgnoreError] = useState<string | null>(null);
@@ -267,6 +272,18 @@ export default function JobDetailPage() {
     } finally {
       setPlacingBid(false);
     }
+  };
+
+  /**
+   * A bid was revised on Freelancer.com. The proposal now holds this text — the
+   * backend syncs it — so keep the page's own fields in step, then refetch so
+   * the dialog prefills from the updated bid next time.
+   */
+  const handleBidUpdated = (values: UpdateBidValues) => {
+    setProposalText(values.description);
+    setBidAmount(String(values.amount));
+    setMilestonePercentage(String(values.milestonePercentage));
+    refetch();
   };
 
   const refreshInsights = async () => {
@@ -500,9 +517,35 @@ export default function JobDetailPage() {
                     <Send data-icon="inline-start" className="size-4" />
                     {placingBid ? "Submitting…" : "Place bid"}
                   </Button>
+                  {/*
+                    Always available: a bid placed outside the app has no local
+                    row, and updating one is exactly the case this covers. The
+                    dialog asks for the bid id when we do not already have it.
+                  */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setUpdateBidOpen(true)}
+                  >
+                    <Pencil data-icon="inline-start" className="size-4" />
+                    Update bid
+                  </Button>
                 </div>
               </CardContent>
             </Card>
+
+            <UpdateBidDialog
+              open={updateBidOpen}
+              onOpenChange={setUpdateBidOpen}
+              projectId={projectId}
+              myBid={job.myBid ?? null}
+              fallback={{
+                description: proposalText,
+                amount: bidAmount,
+                milestonePercentage,
+              }}
+              onUpdated={handleBidUpdated}
+            />
 
             {/* Proposal and bid errors */}
             {proposalError ? (

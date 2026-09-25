@@ -75,6 +75,15 @@ type TestFeedback =
   | { platform: string; ok: false; message: string }
   | null;
 
+/** Result of the Jev engine test — the same shape, without a platform tag. */
+type EngineTestFeedback = { ok: boolean; message: string } | null;
+
+/**
+ * Jev model shown when the user has not picked one. Mirrors the backend
+ * default in `ai/jev.service.ts`.
+ */
+const DEFAULT_JEV_MODEL = "typesafe/jev-1.13";
+
 export default function PlatformsPage() {
   const credentials = useApi<{ credentials: CredentialSummary[] }>("/api/credentials");
 
@@ -84,6 +93,10 @@ export default function PlatformsPage() {
   const [replaceValue, setReplaceValue] = useState("");
   const [savingReplace, setSavingReplace] = useState(false);
   const [replaceError, setReplaceError] = useState<string | null>(null);
+  const [testingJev, setTestingJev] = useState(false);
+  const [jevFeedback, setJevFeedback] = useState<EngineTestFeedback>(null);
+  /** Null until edited, so the field tracks the saved value once it loads. */
+  const [jevModelDraft, setJevModelDraft] = useState<string | null>(null);
 
   const credentialsList = credentials.data?.credentials ?? [];
 
@@ -141,18 +154,56 @@ export default function PlatformsPage() {
     }
   };
 
-  const changeModel = async (
-    field: "analysisModelId" | "proposalModelId",
-    modelId: string
-  ) => {
+  const changeModel = async (body: {
+    analysisModelId?: string;
+    proposalModelId?: string;
+    analysisEngine?: "llm" | "jev";
+    jevModelId?: string;
+  }): Promise<boolean> => {
     try {
-      await api("/api/credentials/openrouter/model", {
-        method: "PUT",
-        body: { [field]: modelId },
-      });
+      await api("/api/credentials/openrouter/model", { method: "PUT", body });
       void credentials.refetch();
+      return true;
     } catch {
       // surfaced via list refresh failure or next interaction
+      return false;
+    }
+  };
+
+  /**
+   * Save the Jev model id. On success the typed value stays put — clearing the
+   * draft here would briefly show the stale saved value, since `refetch` only
+   * schedules the reload. On failure the field reverts to the saved value
+   * rather than pretending the edit stuck.
+   */
+  const saveJevModel = async (modelId: string) => {
+    if (!(await changeModel({ jevModelId: modelId }))) {
+      setJevModelDraft(null);
+    }
+  };
+
+  const runJevTest = async () => {
+    if (testingJev) return;
+    setTestingJev(true);
+    setJevFeedback(null);
+    try {
+      const body = await api<{ result: CredentialTestResult }>(
+        "/api/credentials/openrouter/test-jev",
+        { method: "POST" }
+      );
+      setJevFeedback({ ok: body.result.ok, message: body.result.message });
+    } catch (cause) {
+      setJevFeedback({
+        ok: false,
+        message:
+          cause instanceof NetworkError
+            ? "Cannot reach the server"
+            : cause instanceof ApiError
+              ? cause.message
+              : "Test failed",
+      });
+    } finally {
+      setTestingJev(false);
     }
   };
 
@@ -176,6 +227,14 @@ export default function PlatformsPage() {
           const meta = platformMeta[credential.id];
           const busy = testingId === credential.id;
           const feedbackFor = feedback?.platform === credential.id ? feedback : null;
+          // The Jev model is free text: the catalogue does not always list
+          // decision models. The draft wins while it exists, so a save never
+          // snaps the field back to a stale value.
+          const jevModelValue =
+            jevModelDraft ?? credential.jevModelId ?? DEFAULT_JEV_MODEL;
+          // While Jev screens jobs, the relevance model has no part in the
+          // pipeline — so its control is disabled rather than left looking live.
+          const jevEngine = credential.analysisEngine === "jev";
           return (
             <Card key={credential.id} className="flex flex-col">
               <CardHeader>
@@ -249,25 +308,121 @@ export default function PlatformsPage() {
                     {credential.id === "openrouter" ? (
                       <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
                         <p className="text-xs text-muted-foreground">
-                          Two models keep screening cheap: a fast one decides
-                          relevance, a strong one writes proposals.
+                          Screening runs on one of two engines: your relevance
+                          model, or Jev — a decision model that returns a score
+                          without writing prose. A strong model writes proposals.
                         </p>
+
+                        <div className="flex flex-col gap-1.5">
+                          <Label htmlFor="analysis-engine">Relevance engine</Label>
+                          <Select
+                            value={credential.analysisEngine}
+                            onValueChange={(value) =>
+                              void changeModel({
+                                analysisEngine: value as "llm" | "jev",
+                              })
+                            }
+                          >
+                            <SelectTrigger
+                              id="analysis-engine"
+                              className="w-full"
+                              aria-label="Relevance engine"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="llm">Chat model (LLM)</SelectItem>
+                              <SelectItem value="jev">Jev (decision model)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                            Jev scores jobs faster and far cheaper than a chat
+                            model, but cannot explain itself in words — the
+                            reason shown on a job comes from a fixed list of
+                            factors. Its endpoint is alpha: if it fails, the job
+                            is left unscreened and the error appears in Logs.
+                            The relevance model is never used as a stand-in.
+                          </p>
+                        </div>
+
+                        {credential.analysisEngine === "jev" ? (
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="jev-model">Jev model</Label>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                id="jev-model"
+                                value={jevModelValue}
+                                onChange={(event) => setJevModelDraft(event.target.value)}
+                                placeholder={DEFAULT_JEV_MODEL}
+                                spellCheck={false}
+                                className="font-mono text-sm"
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={jevModelValue.trim().length === 0}
+                                onClick={() => void saveJevModel(jevModelValue.trim())}
+                              >
+                                Save
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={testingJev}
+                                onClick={() => void runJevTest()}
+                              >
+                                <RefreshCw
+                                  className={testingJev ? "animate-spin" : undefined}
+                                  data-icon="inline-start"
+                                />
+                                {testingJev ? "Testing…" : "Test Jev"}
+                              </Button>
+                              {jevFeedback !== null ? (
+                                <span
+                                  className={`flex items-center gap-1.5 text-xs ${
+                                    jevFeedback.ok
+                                      ? "text-muted-foreground"
+                                      : "text-destructive"
+                                  }`}
+                                >
+                                  {jevFeedback.ok ? (
+                                    <CircleCheck className="size-3.5 shrink-0" aria-hidden />
+                                  ) : (
+                                    <CircleX className="size-3.5 shrink-0" aria-hidden />
+                                  )}
+                                  {jevFeedback.message}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                              The model id is free text because the catalogue
+                              does not always list decision models. Defaults to{" "}
+                              {DEFAULT_JEV_MODEL}.
+                            </p>
+                          </div>
+                        ) : null}
+
                         <ModelSelector
                           label="Relevance model"
-                          hint="Must support structured JSON output (response_format): screening and analysis ask this model for a strict JSON schema, and models without it fail relevance checks."
+                          hint={
+                            jevEngine
+                              ? "Not used while the relevance engine is Jev: Jev does the screening, and no chat model stands in for it. Switch the engine back to Chat model to use this again."
+                              : "Must support structured JSON output (response_format): screening and analysis ask this model for a strict JSON schema, and models without it fail relevance checks."
+                          }
                           current={credential.analysisModelId}
                           options={models.data?.models ?? []}
-                          onPick={(modelId) =>
-                            void changeModel("analysisModelId", modelId)
-                          }
+                          disabled={jevEngine}
+                          onPick={(modelId) => void changeModel({ analysisModelId: modelId })}
                         />
                         <ModelSelector
                           label="Proposal model"
                           current={credential.proposalModelId}
                           options={models.data?.models ?? []}
-                          onPick={(modelId) =>
-                            void changeModel("proposalModelId", modelId)
-                          }
+                          onPick={(modelId) => void changeModel({ proposalModelId: modelId })}
                         />
                       </div>
                     ) : null}
@@ -415,20 +570,29 @@ function ModelSelector({
   options,
   onPick,
   hint,
+  disabled,
 }: {
   label: string;
   current: string | null;
   options: AiModelOption[];
   onPick: (modelId: string) => void;
   hint?: string;
+  disabled?: boolean;
 }) {
   const fieldId = `model-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={fieldId}>{label}</Label>
+      <Label htmlFor={fieldId} className={disabled ? "opacity-50" : undefined}>
+        {label}
+      </Label>
       {options.length > 0 ? (
-        <Select value={current ?? undefined} onValueChange={onPick}>
-          <SelectTrigger id={fieldId} className="w-full" aria-label={label}>
+        <Select value={current ?? undefined} onValueChange={onPick} disabled={disabled}>
+          <SelectTrigger
+            id={fieldId}
+            className="w-full"
+            aria-label={label}
+            disabled={disabled}
+          >
             <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>

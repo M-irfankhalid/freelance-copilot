@@ -122,6 +122,18 @@ export interface JobDetailData extends JobSummary {
   suggestion: JobAiSuggestion;
   /** Error from the last failed automatic bid attempt, if any. */
   bidError?: string | null;
+  /**
+   * The user's own bid on this project, when one is on record. Prefills the
+   * Update bid dialog. Null when they have not bid through the app — the dialog
+   * still opens, and they supply Freelancer's bid id themselves.
+   */
+  myBid?: {
+    id: string;
+    freelancerBidId: number | null;
+    amount: number;
+    milestonePercentage: number;
+    description: string;
+  } | null;
 }
 
 /* -------------------------------- Matches -------------------------------- */
@@ -254,6 +266,10 @@ export interface CredentialSummary {
   analysisModelId: string | null;
   /** Model used for proposal writing (strong). */
   proposalModelId: string | null;
+  /** Engine behind the relevance gate: the chat model or the Jev decision model. */
+  analysisEngine: "llm" | "jev";
+  /** Jev model id, when the relevance gate runs on Jev. */
+  jevModelId: string | null;
   usage?: { label: string; used: number; limit: number };
 }
 

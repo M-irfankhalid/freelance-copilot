@@ -7,10 +7,12 @@ import { decrypt, encrypt, mask } from "../../lib/crypto.js";
 import {
   listOpenRouterModels,
   testFreelancerToken,
+  testJevAccess,
   testOpenRouterKey,
   type ModelOption,
   type TestResult,
 } from "./testers.js";
+import { readJevModel } from "../ai/jev.service.js";
 
 /**
  * Credential storage. Values are encrypted at rest and never leave the
@@ -25,6 +27,9 @@ export function isPlatformId(value: string): value is PlatformId {
   return (PLATFORM_IDS as readonly string[]).includes(value);
 }
 
+/** Which engine runs the relevance gate: the chat model or the Jev decision model. */
+export type AnalysisEngine = "llm" | "jev";
+
 interface CredentialMeta {
   /** Legacy single model selection — still honored as a fallback. */
   modelId?: string;
@@ -32,6 +37,13 @@ interface CredentialMeta {
   analysisModelId?: string;
   /** Model used for proposal writing (Model B). */
   proposalModelId?: string;
+  /**
+   * Engine behind the relevance gate. Absent means "llm", so installs saved
+   * before Jev existed keep behaving exactly as they did.
+   */
+  analysisEngine?: AnalysisEngine;
+  /** Jev model id (decision model), when the relevance gate runs on Jev. */
+  jevModelId?: string;
   /** Summary from the last successful test. */
   lastTestMessage?: string;
   usage?: { label: string; used: number; limit: number };
@@ -59,6 +71,10 @@ export interface CredentialSummary {
   analysisModelId: string | null;
   /** Model used for proposal writing. */
   proposalModelId: string | null;
+  /** Engine behind the relevance gate ("llm" unless the user picked Jev). */
+  analysisEngine: AnalysisEngine;
+  /** Jev model id, when the relevance gate runs on Jev. */
+  jevModelId: string | null;
   usage: CredentialMeta["usage"];
 }
 
@@ -77,6 +93,8 @@ export function listCredentials(): CredentialSummary[] {
         modelId: null,
         analysisModelId: null,
         proposalModelId: null,
+        analysisEngine: "llm" as const,
+        jevModelId: null,
         usage: undefined,
       };
     }
@@ -99,6 +117,8 @@ export function listCredentials(): CredentialSummary[] {
       modelId,
       analysisModelId: meta.analysisModelId ?? modelId,
       proposalModelId: meta.proposalModelId ?? modelId,
+      analysisEngine: meta.analysisEngine ?? "llm",
+      jevModelId: meta.jevModelId ?? null,
       usage: meta.usage,
     };
   });
@@ -150,6 +170,25 @@ export async function testStored(id: PlatformId): Promise<TestResult> {
   return result;
 }
 
+/**
+ * Verify the Jev engine with the stored key and the selected Jev model. Unlike
+ * `testStored`, this does NOT write test metadata back to the credential row —
+ * the relevance gate may legitimately run on the LLM while Jev settings are
+ * being tried out, and a Jev-specific failure should not mark the credential
+ * itself as failed.
+ */
+export async function testJevEngine(): Promise<TestResult> {
+  const row = getDb()
+    .select()
+    .from(platformCredentials)
+    .where(eq(platformCredentials.id, "openrouter"))
+    .get();
+  if (row === undefined) {
+    throw notFound("No OpenRouter key saved yet");
+  }
+  return testJevAccess(decrypt(row), readJevModel());
+}
+
 export async function saveCredential(
   id: PlatformId,
   value: string
@@ -166,10 +205,16 @@ export async function saveCredential(
     .where(eq(platformCredentials.id, id))
     .get();
 
-  // Replacing a key keeps the chosen model but resets test metadata.
+  // Replacing a key keeps every setting the user chose — models, the analysis
+  // engine — and resets only the test metadata, which belonged to the old key.
   const prevMeta = existing === undefined ? {} : parseMeta(existing.meta);
+  const {
+    usage: _staleUsage,
+    lastTestMessage: _staleTestMessage,
+    ...settings
+  } = prevMeta;
   const nextMeta = JSON.stringify({
-    ...(prevMeta.modelId !== undefined ? { modelId: prevMeta.modelId } : {}),
+    ...settings,
     lastTestMessage: result.message,
   });
 
@@ -214,6 +259,8 @@ export function setModel(input: {
   modelId?: string;
   analysisModelId?: string;
   proposalModelId?: string;
+  analysisEngine?: AnalysisEngine;
+  jevModelId?: string;
 }): void {
   const row = getDb()
     .select()
@@ -241,6 +288,12 @@ export function setModel(input: {
     meta.proposalModelId = input.proposalModelId;
     // Keep the legacy pointer on the "main" model for any old readers.
     meta.modelId = input.proposalModelId;
+  }
+  if (input.analysisEngine !== undefined) {
+    meta.analysisEngine = input.analysisEngine;
+  }
+  if (input.jevModelId !== undefined) {
+    meta.jevModelId = input.jevModelId;
   }
   getDb()
     .update(platformCredentials)
