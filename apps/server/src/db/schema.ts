@@ -123,6 +123,18 @@ export const jobs = sqliteTable("jobs", {
   autoBidFailedAt: text("auto_bid_failed_at"),
   /** Error message from the last failed automatic bid attempt. */
   autoBidError: text("auto_bid_error"),
+  /**
+   * Delivery time (days) the relevance gate chose for this project, when the
+   * user has AI timeline selection on. Null means "no AI pick" — auto-bid then
+   * falls back to the user's preferred delivery time.
+   */
+  deliveryDays: integer("delivery_days"),
+  /**
+   * Bid amount the relevance gate chose for this project, when the user has AI
+   * bid-amount selection on. Null means "no AI pick" — auto-bid then prices off
+   * the project's minimum budget as before.
+   */
+  bidAmount: integer("bid_amount"),
   importedAt: text("imported_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (table) => [
@@ -231,6 +243,26 @@ export const automationSettings = sqliteTable("automation_settings", {
   rejectStaleJobs: integer("reject_stale_jobs").notNull().default(1),
   rejectIgnoredCountries: integer("reject_ignored_countries").notNull().default(1),
   rejectBadReputation: integer("reject_bad_reputation").notNull().default(1),
+  /** Let the relevance gate pick each project's delivery time. */
+  aiDeliveryTimeline: integer("ai_delivery_timeline").notNull().default(0),
+  /** Delivery time (days) quoted when AI selection is off. */
+  preferredDeliveryDays: integer("preferred_delivery_days").notNull().default(4),
+  /** JSON array of the day values the AI may choose from. Null → the default list. */
+  deliveryTimelineOptions: text("delivery_timeline_options"),
+  /** Free-text guidance for the pick. Null → the default text. */
+  deliveryTimelineInstructions: text("delivery_timeline_instructions"),
+  /** Let the relevance gate pick each project's bid amount from a fraction of the project max. */
+  aiBidAmount: integer("ai_bid_amount").notNull().default(0),
+  /** JSON array of the fraction strings the AI may choose from (e.g. ["1/2","1/3","2/3","full"]). */
+  bidAmountFractions: text("bid_amount_fractions"),
+  /** Free-text guidance for the bid-amount pick. Null → the default text. */
+  bidAmountInstructions: text("bid_amount_instructions"),
+  /** When AI bid selection is off, markup the minimum by this % of the project max. */
+  defaultBidMarkupPct: integer("default_bid_markup_pct").notNull().default(0),
+  /** Guidance for the default markup rule. Null → the default text. */
+  bidAmountMarkupInstructions: text("bid_amount_markup_instructions"),
+  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  roundBidUpTo: integer("round_bid_up_to").notNull().default(0),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

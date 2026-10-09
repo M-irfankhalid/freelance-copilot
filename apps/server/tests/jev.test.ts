@@ -16,8 +16,17 @@ process.env.ENCRYPTION_KEY ??= "test-master-key-at-least-32-chars-long!!";
 
 const { createApp } = await import("../src/app.js");
 const { closeDb } = await import("../src/db/index.js");
-const { buildJevState, validateJevGateOutput, scoreFromLevelIndex, JEV_DECIDING_FACTORS, JEV_SCORE_LEVELS } =
-  await import("../src/modules/ai/jev.service.js");
+const {
+  buildJevState,
+  validateJevGateOutput,
+  scoreFromLevelIndex,
+  JEV_DECIDING_FACTORS,
+  JEV_SCORE_LEVELS,
+  buildJevGateQuestions,
+  buildDeliveryPeriodQuestion,
+  buildBidAmountQuestion,
+  readAnswerChoice,
+} = await import("../src/modules/ai/jev.service.js");
 
 let app: Express;
 let baseUrl: string;
@@ -519,6 +528,199 @@ describe("relevance gate on Jev", () => {
   });
 });
 
+describe("delivery timeline question", () => {
+  const TIMELINE = {
+    options: [1, 3, 5, 7, 10],
+    instructions: "Pick the shortest honest timeline.",
+  };
+
+  it("asks only the two usual questions when the timeline is off", () => {
+    expect(Object.keys(buildJevGateQuestions())).toEqual(["score", "deciding_factor"]);
+    expect(buildJevGateQuestions(undefined)["delivery_period"]).toBeUndefined();
+  });
+
+  it("adds a choice question whose keys are the offered days", () => {
+    const questions = buildJevGateQuestions(TIMELINE);
+    const question = questions["delivery_period"];
+    expect(question?.type).toBe("choice");
+    expect(Object.keys((question as { criteria: object }).criteria)).toEqual([
+      "1",
+      "3",
+      "5",
+      "7",
+      "10",
+    ]);
+  });
+
+  it("carries the user's instructions into the question", () => {
+    const question = buildDeliveryPeriodQuestion(TIMELINE) as {
+      instructions: string;
+    };
+    expect(question.instructions).toContain("Pick the shortest honest timeline.");
+  });
+
+  it("dedupes and sorts the offered days", () => {
+    const question = buildDeliveryPeriodQuestion({
+      options: [10, 1, 1, 3],
+      instructions: "Any.",
+    }) as { criteria: Record<string, string> };
+    expect(Object.keys(question.criteria)).toEqual(["1", "3", "10"]);
+  });
+
+  it("asks nothing when the user's list has no usable days", () => {
+    // An empty `criteria` would leave the model nothing to answer, so the
+    // question is omitted rather than sent broken.
+    expect(buildDeliveryPeriodQuestion({ options: [], instructions: "Any." })).toBeNull();
+    expect(
+      buildJevGateQuestions({ options: [0, -1], instructions: "Any." })["delivery_period"]
+    ).toBeUndefined();
+  });
+
+  it("reads the answer as a day count", () => {
+    const response = {
+      answers: { score: 4, deciding_factor: { choice: "good_fit" }, delivery_period: { choice: "3" } },
+    };
+    const parsed = validateJevGateOutput(response, [1, 3, 5, 7, 10]);
+    expect(parsed.deliveryDays).toBe(3);
+    expect(parsed.score).toBe(scoreFromLevelIndex(4, JEV_SCORE_LEVELS.length));
+  });
+
+  it("tolerates a bare string answer", () => {
+    expect(readAnswerChoice("7", ["1", "7"])).toBe("7");
+    expect(
+      validateJevGateOutput(
+        { answers: { score: 4, deciding_factor: { choice: "good_fit" }, delivery_period: "7" } },
+        [1, 7]
+      ).deliveryDays
+    ).toBe(7);
+  });
+
+  it("nulls an answer that is missing or was never on offer", () => {
+    const base = { answers: { score: 4, deciding_factor: { choice: "good_fit" } } };
+    expect(validateJevGateOutput(base, [1, 3]).deliveryDays).toBeNull();
+    expect(
+      validateJevGateOutput(
+        { answers: { ...base.answers, delivery_period: { choice: "4" } } },
+        [1, 3]
+      ).deliveryDays
+    ).toBeNull();
+  });
+
+  it("keeps the result shape unchanged when no timeline was asked for", () => {
+    // Every pre-feature caller reads this object and must not see a new key.
+    const parsed = validateJevGateOutput({
+      answers: { score: 4, deciding_factor: { choice: "good_fit" } },
+    });
+    expect(parsed).toEqual({
+      score: scoreFromLevelIndex(4, JEV_SCORE_LEVELS.length),
+      factor: "good_fit",
+      confidence: null,
+    });
+  });
+});
+
+describe("bid amount question", () => {
+  const BID_AMOUNT = {
+    options: [250, 375, 500, 750],
+    instructions: "Quote a bid that balances win probability with profit.",
+  };
+
+  it("asks only the two usual questions when bid amount is off", () => {
+    expect(Object.keys(buildJevGateQuestions())).toEqual(["score", "deciding_factor"]);
+    expect(buildJevGateQuestions(undefined, undefined)["bid_amount"]).toBeUndefined();
+  });
+
+  it("adds a choice question whose keys are the offered dollar values", () => {
+    const questions = buildJevGateQuestions(undefined, BID_AMOUNT);
+    const question = questions["bid_amount"];
+    expect(question?.type).toBe("choice");
+    expect(Object.keys((question as { criteria: object }).criteria)).toEqual([
+      "250",
+      "375",
+      "500",
+      "750",
+    ]);
+  });
+
+  it("carries the user's instructions into the question", () => {
+    const question = buildBidAmountQuestion(BID_AMOUNT) as {
+      instructions: string;
+    };
+    expect(question.instructions).toContain(
+      "Quote a bid that balances win probability with profit."
+    );
+  });
+
+  it("dedupes and sorts the offered dollar amounts", () => {
+    const question = buildBidAmountQuestion({
+      options: [750, 250, 250, 500],
+      instructions: "Any.",
+    }) as { criteria: Record<string, string> };
+    expect(Object.keys(question.criteria)).toEqual(["250", "500", "750"]);
+  });
+
+  it("asks nothing when the options list has no usable amounts", () => {
+    expect(buildBidAmountQuestion({ options: [], instructions: "Any." })).toBeNull();
+    expect(
+      buildJevGateQuestions(undefined, { options: [0, -100], instructions: "Any." })[
+        "bid_amount"
+      ]
+    ).toBeUndefined();
+  });
+
+  it("reads the answer as a dollar number", () => {
+    const response = {
+      answers: {
+        score: 4,
+        deciding_factor: { choice: "good_fit" },
+        bid_amount: { choice: "500" },
+      },
+    };
+    const parsed = validateJevGateOutput(response, null, [250, 500, 750]);
+    expect(parsed.bidAmount).toBe(500);
+    expect(parsed.score).toBe(scoreFromLevelIndex(4, JEV_SCORE_LEVELS.length));
+  });
+
+  it("tolerates a bare string answer", () => {
+    expect(
+      validateJevGateOutput(
+        {
+          answers: {
+            score: 4,
+            deciding_factor: { choice: "good_fit" },
+            bid_amount: "750",
+          },
+        },
+        null,
+        [250, 750]
+      ).bidAmount
+    ).toBe(750);
+  });
+
+  it("nulls an answer that is missing or was never on offer", () => {
+    const base = { answers: { score: 4, deciding_factor: { choice: "good_fit" } } };
+    expect(validateJevGateOutput(base, null, [250, 500]).bidAmount).toBeNull();
+    expect(
+      validateJevGateOutput(
+        { answers: { ...base.answers, bid_amount: { choice: "100" } } },
+        null,
+        [250, 500]
+      ).bidAmount
+    ).toBeNull();
+  });
+
+  it("keeps the result shape unchanged when no bid amount was asked for", () => {
+    const parsed = validateJevGateOutput({
+      answers: { score: 4, deciding_factor: { choice: "good_fit" } },
+    });
+    expect(parsed).toEqual({
+      score: scoreFromLevelIndex(4, JEV_SCORE_LEVELS.length),
+      factor: "good_fit",
+      confidence: null,
+    });
+  });
+});
+
 describe("Jev engine test action", () => {
   it("reports success when the decisions endpoint answers", async () => {
     let sent: Record<string, unknown> | null = null;
@@ -544,6 +746,102 @@ describe("Jev engine test action", () => {
       | undefined;
     expect(questions?.["score"]?.type).toBe("score");
     expect(questions?.["score"]?.criteria).toEqual([...JEV_SCORE_LEVELS]);
+  });
+
+  it("probes with the delivery-time question when the user has it on", async () => {
+    // The Decisions API validates shapes strictly, and this project has already
+    // shipped a bug where a rejected shape 400'd every screening call while the
+    // connectivity probe still reported success. So the probe has to send the
+    // gate's exact question set, timeline question included.
+    await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        aiDeliveryTimeline: true,
+        deliveryTimelineOptions: [1, 3, 5, 7, 10],
+      }),
+    });
+
+    let sent: Record<string, unknown> | null = null;
+    try {
+      stubUpstreams({
+        decisions: (body) => {
+          sent = body;
+          return jevAnswers(5, "good_fit", 0.9);
+        },
+      });
+      const res = await realFetch(`${baseUrl}/api/credentials/openrouter/test-jev`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: { ok: boolean; message: string } };
+      expect(body.result.ok).toBe(true);
+
+      const questions = sent?.["questions"] as
+        | Record<string, { type?: string; criteria?: unknown }>
+        | undefined;
+      expect(questions?.["delivery_period"]?.type).toBe("choice");
+      expect(Object.keys(questions?.["delivery_period"]?.criteria ?? {})).toEqual([
+        "1",
+        "3",
+        "5",
+        "7",
+        "10",
+      ]);
+    } finally {
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ aiDeliveryTimeline: false }),
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("probes with the bid-amount question when the user has it on", async () => {
+    await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        aiBidAmount: true,
+        bidAmountFractions: ["1/2", "full"],
+      }),
+    });
+
+    let sent: Record<string, unknown> | null = null;
+    try {
+      stubUpstreams({
+        decisions: (body) => {
+          sent = body;
+          return jevAnswers(5, "good_fit", 0.9);
+        },
+      });
+      const res = await realFetch(`${baseUrl}/api/credentials/openrouter/test-jev`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: { ok: boolean; message: string } };
+      expect(body.result.ok).toBe(true);
+
+      const questions = sent?.["questions"] as
+        | Record<string, { type?: string; criteria?: unknown }>
+        | undefined;
+      expect(questions?.["bid_amount"]?.type).toBe("choice");
+      // The probe uses a round $500 max budget, so 1/2 and full become $250 and $500.
+      expect(Object.keys(questions?.["bid_amount"]?.criteria ?? {})).toEqual([
+        "250",
+        "500",
+      ]);
+    } finally {
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ aiBidAmount: false }),
+      });
+      vi.unstubAllGlobals();
+    }
   });
 
   it("reports failure when the answer does not land on the score scale", async () => {

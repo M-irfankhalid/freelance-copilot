@@ -52,26 +52,64 @@ function jsonSchemaResponseFormat(
  * Output contract for the fast relevance gate (Model A). Guarantees the model
  * emits exactly {score: 0-100 integer, reason: short string} and nothing else,
  * so the gate decision never has to be recovered from prose.
+ *
+ * `deliveryDays` is added only when the user has AI timeline selection on (see
+ * `buildRelevancyResponseFormat`). `additionalProperties: false` means the
+ * property must be absent from the schema when the feature is off, not merely
+ * left unrequested — so the schema is built per call rather than shared.
  */
-export const RELEVANCY_RESPONSE_FORMAT: JsonSchemaResponseFormat = jsonSchemaResponseFormat(
-  "relevancy_check",
-  {
+export function buildRelevancyResponseFormat(
+  deliveryDayOptions: number[] | null,
+  bidAmountOptions: number[] | null = null
+): JsonSchemaResponseFormat {
+  const properties: Record<string, unknown> = {
+    score: {
+      type: "integer",
+      description:
+        "0-100. How worth pursuing this job is, combining profile fit with client trustworthiness.",
+    },
+    reason: {
+      type: "string",
+      description: "One short sentence (under 25 words) naming the single deciding factor.",
+    },
+  };
+  const required = ["score", "reason"];
+
+  if (deliveryDayOptions !== null && deliveryDayOptions.length > 0) {
+    properties["deliveryDays"] = {
+      type: "integer",
+      enum: deliveryDayOptions,
+      description:
+        "Delivery time to quote, in days. Pick the SHORTEST value you can honestly commit to for this project's actual scope.",
+    };
+    required.push("deliveryDays");
+  }
+
+  // The bid-amount question is asked only when the user turned it on AND the
+  // project has a usable maximum budget. The schema enum carries the concrete
+  // dollar values the model may pick from (computed from its fraction list at
+  // screening time), so a chosen value is always a number auto-bid can send.
+  if (bidAmountOptions !== null && bidAmountOptions.length > 0) {
+    properties["bidAmount"] = {
+      type: "integer",
+      enum: bidAmountOptions,
+      description:
+        "Bid amount to quote, in dollars. Choose the value that best matches the actual scope and the client's budget window.",
+    };
+    required.push("bidAmount");
+  }
+
+  return jsonSchemaResponseFormat("relevancy_check", {
     type: "object",
     additionalProperties: false,
-    properties: {
-      score: {
-        type: "integer",
-        description:
-          "0-100. How worth pursuing this job is, combining profile fit with client trustworthiness.",
-      },
-      reason: {
-        type: "string",
-        description: "One short sentence (under 25 words) naming the single deciding factor.",
-      },
-    },
-    required: ["score", "reason"],
-  }
-);
+    properties,
+    required,
+  });
+}
+
+/** The gate's schema with no timeline question — the pre-feature behavior. */
+export const RELEVANCY_RESPONSE_FORMAT: JsonSchemaResponseFormat =
+  buildRelevancyResponseFormat(null);
 
 /**
  * Output contract for the deep job analysis. Mirrors AnalysisResult so every
@@ -215,6 +253,25 @@ export interface RelevancyCheck {
   score: number;
   /** One short sentence explaining the deciding factor. */
   reason: string;
+  /**
+   * Delivery time (days) the gate picked for this project, when the user has AI
+   * timeline selection on. Absent or null means "no pick" — the bid then uses
+   * the user's preferred delivery time.
+   *
+   * Optional on purpose: callers that never ask for a timeline must keep
+   * getting exactly `{score, reason}`, so the field stays off the object rather
+   * than being present-and-null.
+   */
+  deliveryDays?: number | null;
+  /**
+   * Bid amount the gate picked for this project, when the user has AI bid-amount
+   * selection on and the project has a usable maximum budget. Absent or null
+   * means "no pick" — auto-bid then prices off the minimum budget.
+   *
+   * Optional on purpose, mirroring `deliveryDays`: present only when a bid-amount
+   * question was asked, so callers that never ask keep getting `{score, reason}`.
+   */
+  bidAmount?: number | null;
 }
 
 /** Client trust + project signals the relevance model should weigh. */
@@ -243,9 +300,42 @@ export interface RelevancyPromptData {
   client?: RelevancyClientData | null;
   /** Pre-formatted budget label, e.g. "$100 – $500". */
   budgetLabel?: string | null;
+  /**
+   * The project's maximum budget, when the project has one. The gate needs a
+   * concrete number to compute bid-amount fraction options from. Absent means
+   * "no bid-amount question".
+   */
+  budgetMaximum?: number | null;
   /** Project billing type: "fixed" | "hourly". */
   projectType?: string | null;
   bidCount?: number;
+  /**
+   * The delivery time the client themselves asked for, in days. The single
+   * strongest signal for picking a timeline — a client who stated a deadline
+   * should never be quoted longer than it.
+   */
+  bidPeriod?: number | null;
+}
+
+/** How the gate should pick a delivery timeline, when the user has it on. */
+export interface DeliveryTimelineRequest {
+  /** The closed list of day values the model may choose from. Never empty. */
+  options: number[];
+  /** The user's own guidance, already defaulted when they left it blank. */
+  instructions: string;
+}
+
+/**
+ * How the gate should pick a bid amount, when the user has it on. The
+ * `options` are concrete dollar values (computed from the user's fraction list
+ * × the project's max budget at screening time), so a choice is always a number
+ * auto-bid can send straight to Freelancer.com.
+ */
+export interface BidAmountRequest {
+  /** The closed list of dollar values the model may choose from. Never empty. */
+  options: number[];
+  /** The user's own guidance, already defaulted when they left it blank. */
+  instructions: string;
 }
 
 /** Data needed to generate a proposal via AI. */
@@ -640,8 +730,18 @@ function unparsableJsonMessage(kind: string, rawText: string): string {
 /**
  * Validate that AI output is properly structured JSON matching RelevancyCheck.
  * The fast relevance model (Model A) returns a gate decision, never free-form.
+ *
+ * `deliveryDayOptions` is passed only when the gate asked for a timeline. The
+ * value is then read and accepted ONLY if it is one of the offered values; an
+ * unusable answer yields `null` rather than throwing. A bad timeline must never
+ * fail the gate — the job would go unscreened over a number that has a safe
+ * fallback (the user's preferred delivery time).
  */
-export function validateRelevancyOutput(rawText: string): RelevancyCheck {
+export function validateRelevancyOutput(
+  rawText: string,
+  deliveryDayOptions?: number[] | null,
+  bidAmountOptions?: number[] | null
+): RelevancyCheck {
   const parsed = extractJsonObject(rawText);
 
   if (parsed === null) {
@@ -668,7 +768,58 @@ export function validateRelevancyOutput(rawText: string): RelevancyCheck {
     );
   }
 
-  return { score, reason };
+  // No timeline requested → keep the return shape exactly as it was.
+  if (deliveryDayOptions === undefined || deliveryDayOptions === null) {
+    // But only return bidAmount when a bid-amount question was asked (mirroring
+    // the timeline rule — the field is off the object when the feature is off).
+    if (bidAmountOptions === undefined || bidAmountOptions === null) {
+      return { score, reason };
+    }
+    return { score, reason, bidAmount: readBidAmount(obj["bidAmount"], bidAmountOptions) };
+  }
+
+  const result: RelevancyCheck = {
+    score,
+    reason,
+    deliveryDays: readDeliveryDays(obj["deliveryDays"], deliveryDayOptions),
+  };
+  if (bidAmountOptions !== undefined && bidAmountOptions !== null) {
+    result.bidAmount = readBidAmount(obj["bidAmount"], bidAmountOptions);
+  }
+  return result;
+}
+
+/**
+ * A model's chosen delivery time, or null when it is missing, not a whole
+ * number, or not one of the values we offered. Never throws.
+ */
+export function readDeliveryDays(
+  raw: unknown,
+  options: readonly number[]
+): number | null {
+  // Tolerate a numeric string ("3"): the schema asks for an integer, but a
+  // model that ignores the enum should not cost us the whole timeline.
+  const value =
+    typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.trim()) : NaN;
+  if (!Number.isInteger(value)) return null;
+  return options.includes(value) ? value : null;
+}
+
+/**
+ * A model's chosen bid amount, or null when it is missing, not a whole
+ * number, or not one of the offered dollar values. Never throws — a bad
+ * amount has a safe fallback (the minimum budget).
+ */
+export function readBidAmount(
+  raw: unknown,
+  options: readonly number[]
+): number | null {
+  // Tolerate a numeric string: the schema asks for an integer, but a model
+  // that ignores the enum should not cost us the whole amount.
+  const value =
+    typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.trim()) : NaN;
+  if (!Number.isInteger(value)) return null;
+  return options.includes(value) ? value : null;
 }
 
 /**
@@ -678,7 +829,11 @@ export function validateRelevancyOutput(rawText: string): RelevancyCheck {
  * Output tokens are the main cost of this call, so the answer is kept to a
  * single line.
  */
-export function buildRelevancyPrompt(data: RelevancyPromptData): string {
+export function buildRelevancyPrompt(
+  data: RelevancyPromptData,
+  timeline?: DeliveryTimelineRequest,
+  bidAmount?: BidAmountRequest
+): string {
   const userSummary = data.userSummary?.trim() || "No user summary provided.";
   const instructions = data.relevancyInstructions?.trim() || "None.";
 
@@ -704,10 +859,37 @@ export function buildRelevancyPrompt(data: RelevancyPromptData): string {
     data.budgetLabel ? `Budget: ${data.budgetLabel}` : null,
     data.projectType ? `Type: ${data.projectType}` : null,
     data.bidCount !== undefined ? `Bids: ${data.bidCount}` : null,
+    data.bidPeriod ? `Delivery time the client asked for: ${data.bidPeriod} days` : null,
     `Upgrades: ${upgrades}`,
   ]
     .filter((l): l is string => l !== null)
     .join("\n");
+
+  // The timeline question is asked only when the user turned it on. Kept out of
+  // the prompt entirely otherwise, so the gate's output stays a pure
+  // score+reason decision for everyone who has not opted in.
+  const timelineBlock =
+    timeline === undefined
+      ? ""
+      : `
+
+=== DELIVERY TIMELINE ===
+${timeline.instructions}
+
+Choose the delivery time to quote, in days, from exactly these values: ${timeline.options.join(", ")}. Never quote longer than the delivery time the client asked for, when they stated one.`;
+
+  // The bid-amount question is asked only when the user turned it on AND the
+  // project has a usable maximum budget (the options are fractions of that max,
+  // resolved to concrete dollars at screening time).
+  const bidAmountBlock =
+    bidAmount === undefined
+      ? ""
+      : `
+
+=== BID AMOUNT ===
+${bidAmount.instructions}
+
+Choose the bid amount to quote, in dollars, from exactly these values: ${bidAmount.options.join(", ")}. Pick the value that best matches the actual scope and the client's budget window — never quote the project minimum out of habit.`;
 
   return `
 You are a fast, low-cost job screener for a freelance agent. Decide whether the job is worth the freelancer's time AND whether the client is trustworthy enough to auto-bid on. Use ONLY the facts below. Never invent facts about the user or the client.
@@ -739,8 +921,17 @@ Return ONE score (0-100) plus a one-sentence reason. A score of 80+ makes the jo
 - Account age is only ONE factor combined with the others, never a hard rule by itself.
 - NDA / IP-contract projects are never auto-bid regardless of score (they need a signature); score them anyway for manual review.
 - A short description is not a reason to reject a job.
-
-Respond with ONLY a single valid JSON object and nothing else — no markdown, no code fences, no text before or after. Format: {"score": number 0-100, "reason": "one short sentence (under 25 words) naming the deciding factor"}
+${timelineBlock}
+${bidAmountBlock}
+Respond with ONLY a single valid JSON object and nothing else — no markdown, no code fences, no text before or after. Format: {"score": number 0-100, "reason": "one short sentence (under 25 words) naming the deciding factor"${
+    timeline === undefined
+      ? ""
+      : `, "deliveryDays": one of ${timeline.options.join("|")}`
+  }${
+    bidAmount === undefined
+      ? ""
+      : `, "bidAmount": one of ${bidAmount.options.join("|")}`
+  }}
 `.trim();
 }
 
@@ -754,13 +945,19 @@ Respond with ONLY a single valid JSON object and nothing else — no markdown, n
  * would mean the engine actually in use is not the one configured, and a
  * broken Jev setup would look like a working one. A Jev failure is logged and
  * raised instead, so it is visible in Logs and on the job.
+ *
+ * `timeline` and `bidAmount` are passed only when the user has the
+ * corresponding AI selection on. Omitted, the gate is exactly what it was
+ * before those features existed.
  */
 export async function checkRelevancyWithAI(
-  data: RelevancyPromptData
+  data: RelevancyPromptData,
+  timeline?: DeliveryTimelineRequest,
+  bidAmount?: BidAmountRequest
 ): Promise<RelevancyCheck> {
   if (readAnalysisEngine() === "jev") {
     try {
-      return await checkRelevancyWithJev(data);
+      return await checkRelevancyWithJev(data, timeline, bidAmount);
     } catch (error) {
       log.warn(
         `Jev relevance gate failed — job not screened (engine is set to Jev): ${
@@ -776,16 +973,33 @@ export async function checkRelevancyWithAI(
     "You are a fast, low-cost job screener. Score whether the job is worth pursuing for the freelancer, combining how well it matches with how trustworthy the client is. Use ONLY the facts provided. Never invent facts about the user or the client.";
   const rawResponse = await callOpenRouter(
     systemPrompt,
-    buildRelevancyPrompt(data),
+    buildRelevancyPrompt(data, timeline, bidAmount),
     readAnalysisModel() ?? undefined,
     undefined,
-    { maxTokens: RELEVANCE_MAX_TOKENS, responseFormat: RELEVANCY_RESPONSE_FORMAT }
+    {
+      maxTokens: RELEVANCE_MAX_TOKENS,
+      responseFormat: buildRelevancyResponseFormat(
+        timeline?.options ?? null,
+        bidAmount?.options ?? null
+      ),
+    }
   );
-  const result = validateRelevancyOutput(rawResponse);
-  log.info(`Relevance gate: score=${result.score}`, {
-    jobTitle: data.jobTitle,
-    reason: result.reason,
-  });
+  const result = validateRelevancyOutput(rawResponse, timeline?.options, bidAmount?.options);
+  log.info(
+    `Relevance gate: score=${result.score}${
+      result.deliveryDays !== undefined && result.deliveryDays !== null
+        ? ` timeline=${result.deliveryDays}d`
+        : ""
+    }${
+      result.bidAmount !== undefined && result.bidAmount !== null
+        ? ` bid=$${result.bidAmount}`
+        : ""
+    }`,
+    {
+      jobTitle: data.jobTitle,
+      reason: result.reason,
+    }
+  );
   return result;
 }
 

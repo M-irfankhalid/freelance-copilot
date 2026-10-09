@@ -62,10 +62,9 @@ credentialsRouter.put("/openrouter/model", (req, res, next) => {
   }
 });
 
-/** Verify the Jev decision engine with the stored key and Jev model. */
-credentialsRouter.post("/openrouter/test-jev", async (_req, res, next) => {
+credentialsRouter.post("/openrouter/test-jev", async (req, res, next) => {
   try {
-    res.json({ result: await testJevEngine() });
+    res.json({ result: await testJevEngine(req.user!.id) });
   } catch (error) {
     next(error);
   }

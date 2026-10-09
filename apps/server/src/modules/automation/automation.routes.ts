@@ -2,6 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { parseBody } from "../../lib/validate.js";
+import {
+  MAX_DELIVERY_DAYS,
+  MIN_DELIVERY_DAYS,
+} from "../../lib/delivery-timeline.js";
 import { requireUser } from "../../middleware/require-user.js";
 import {
   getOrCreateSettings,
@@ -42,6 +46,35 @@ automationRouter.put("/", async (req, res, next) => {
         rejectStaleJobs: z.boolean().optional(),
         rejectIgnoredCountries: z.boolean().optional(),
         rejectBadReputation: z.boolean().optional(),
+        aiDeliveryTimeline: z.boolean().optional(),
+        preferredDeliveryDays: z
+          .number()
+          .int()
+          .min(MIN_DELIVERY_DAYS)
+          .max(MAX_DELIVERY_DAYS)
+          .optional(),
+        // At least one value: the list is the AI's whole answer space, so an
+        // empty one would leave it nothing to choose (and is not a valid
+        // JSON-schema enum either). Sanitized again on write and on read.
+        deliveryTimelineOptions: z
+          .array(z.number().int().min(MIN_DELIVERY_DAYS).max(MAX_DELIVERY_DAYS))
+          .min(1)
+          .max(12)
+          .optional(),
+        deliveryTimelineInstructions: z.string().max(2000).optional(),
+        aiBidAmount: z.boolean().optional(),
+        // Must be valid fraction strings ("X/Y" or "full") — the gate builds its
+        // answer space from these. At least one is required (an empty list would
+        // leave the AI nothing to choose, and is not a valid JSON-schema enum).
+        bidAmountFractions: z
+          .array(z.string().max(20))
+          .min(1)
+          .max(50)
+          .optional(),
+        bidAmountInstructions: z.string().max(2000).optional(),
+        defaultBidMarkupPct: z.number().int().min(0).max(100).optional(),
+        bidAmountMarkupInstructions: z.string().max(2000).optional(),
+        roundBidUpTo: z.number().int().min(0).max(1000).optional(),
       }),
       req.body
     );

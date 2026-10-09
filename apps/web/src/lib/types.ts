@@ -115,6 +115,23 @@ export interface JobDetailData extends JobSummary {
   projectType?: string | null;
   /** Bid period in days, if the project specifies one. */
   bidPeriod?: number | null;
+  /**
+   * Delivery time (days) the relevance gate picked for this project, when AI
+   * timeline selection was on at analysis time. Null otherwise.
+   */
+  deliveryDays?: number | null;
+  /**
+   * Bid amount (dollars) the relevance gate picked for this project, when AI
+   * bid-amount selection was on at analysis time. Null otherwise.
+   */
+  bidAmount?: number | null;
+  /**
+   * Suggested bid amount pre-filled on the manual bid page. When AI bid-amount
+   * selection was on this is the gate's pick; when off it is the default-markup
+   * amount (minimum + the user's markup% of the project max). Null when no
+   * usable suggestion exists.
+   */
+  suggestedBidAmount?: number | null;
   attachments: JobAttachment[];
   /** Aggregate competition data from stored bids, if fetched. */
   competition?: CompetitionSummary | null;
@@ -325,6 +342,34 @@ export interface AutomationSettings {
   rejectIgnoredCountries: boolean;
   /** Reject brand-new, unverified clients (no deposit/upgrades) before analysis. */
   rejectBadReputation: boolean;
+  /**
+   * Let the relevance gate pick the delivery time (days) per project during
+   * screening. Off by default: the preferred days below are used instead.
+   */
+  aiDeliveryTimeline: boolean;
+  /** Delivery time (days) used when AI selection is off. */
+  preferredDeliveryDays: number;
+  /** Days the AI may choose from when AI selection is on. */
+  deliveryTimelineOptions: number[];
+  /** Guidance the AI follows when picking a delivery time. */
+  deliveryTimelineInstructions: string;
+  /**
+   * Let the relevance gate pick the bid amount per project during screening,
+   * as a fraction of the project's maximum budget. Off by default: auto-bid
+   * prices off the minimum budget instead.
+   */
+  aiBidAmount: boolean;
+  /** Fraction strings the AI may choose from (e.g. "1/2", "1/3", "2/3", "full"). */
+  bidAmountFractions: string[];
+  /** Guidance the AI follows when picking a bid amount. */
+  bidAmountInstructions: string;
+  /** Percentage (0–100) applied to the project max as a markup on the minimum,
+   * when AI bid-amount selection is off. */
+  defaultBidMarkupPct: number;
+  /** Guidance for the default markup rule. */
+  bidAmountMarkupInstructions: string;
+  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  roundBidUpTo: number;
 }
 
 export type AutomationRunResult = "ok" | "skipped" | "error";
@@ -467,6 +512,17 @@ export interface MatchQualitySnapshot {
   bands: MatchQualityBand[];
 }
 
+export interface BidAmountSettingsSummary {
+  aiBidAmount: boolean;
+  bidAmountFractions: string[];
+  defaultBidMarkupPct: number;
+  minBid: number;
+  maxBid: number;
+  bidAmountInstructions: string;
+  bidAmountMarkupInstructions: string;
+  roundBidUpTo: number;
+}
+
 export interface DashboardSnapshot {
   kpis: KpiMetric[];
   matchQuality: MatchQualitySnapshot;
@@ -476,6 +532,7 @@ export interface DashboardSnapshot {
   bidWinRate: { rate: number; windowLabel: string; submitted: number };
   platforms: PlatformConnection[];
   activity: ActivityEvent[];
+  bidAmount: BidAmountSettingsSummary | null;
 }
 
 /** Lightweight per-platform line used on the dashboard status card. */

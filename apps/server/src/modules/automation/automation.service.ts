@@ -39,11 +39,23 @@ import {
   type ClientQuality,
 } from "../jobs/client-quality.js";
 import { MAX_CONSECUTIVE_ERRORS } from "../logs/logs.service.js";
+import {
+  DEFAULT_BID_AMOUNT_INSTRUCTIONS,
+  DEFAULT_BID_AMOUNT_FRACTIONS,
+  DEFAULT_BID_AMOUNT_MARKUP_INSTRUCTIONS,
+  DEFAULT_BID_AMOUNT_MARKUP_PCT,
+  DEFAULT_BID_AMOUNT_ROUND_UP_TO,
+  DEFAULT_DELIVERY_TIMELINE_INSTRUCTIONS,
+  DEFAULT_DELIVERY_TIMELINE_OPTIONS,
+  DEFAULT_PREFERRED_DELIVERY_DAYS,
+  resolveBidAmount,
+  resolveDeliveryDays,
+  sanitizeBidAmountFractions,
+  sanitizeDeliveryDaysList,
+} from "../../lib/delivery-timeline.js";
 
 const log = createLogger("bid");
 
-/** Default bid delivery period (days) and milestone percentage for auto-bids. */
-const DEFAULT_BID_PERIOD = 4;
 // Freelancer.com requires milestone percentage to be in [20, 100]; 0 is
 // rejected upstream, so auto-bids default to a 50% milestone.
 const DEFAULT_MILESTONE_PERCENTAGE = 50;
@@ -75,6 +87,28 @@ export interface AutomationSettings {
   rejectIgnoredCountries: boolean;
   /** Reject brand-new, unverified, no-deposit clients with no upgrades before analysis. */
   rejectBadReputation: boolean;
+  /** Let the relevance gate pick each project's delivery time. */
+  aiDeliveryTimeline: boolean;
+  /** Delivery time (days) quoted when AI selection is off, or when the gate
+   * produced no value for a job. */
+  preferredDeliveryDays: number;
+  /** The day values the AI may choose from. Never empty. */
+  deliveryTimelineOptions: number[];
+  /** Free-text guidance the AI follows when picking. Never empty. */
+  deliveryTimelineInstructions: string;
+  /** Let the relevance gate pick each project's bid amount from a fraction of the project max. */
+  aiBidAmount: boolean;
+  /** The fraction strings the AI may choose from (e.g. ["1/2","1/3","2/3","full"]). */
+  bidAmountFractions: string[];
+  /** Free-text guidance for the bid-amount pick. Never empty. */
+  bidAmountInstructions: string;
+  /** Percentage (0–100) applied to the project max as a markup on the minimum,
+   * when AI bid-amount selection is off. */
+  defaultBidMarkupPct: number;
+  /** Guidance for the default markup rule. Never empty. */
+  bidAmountMarkupInstructions: string;
+  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  roundBidUpTo: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,6 +147,16 @@ function rowToSettings(row: {
   rejectStaleJobs: number;
   rejectIgnoredCountries: number;
   rejectBadReputation: number;
+  aiDeliveryTimeline: number;
+  preferredDeliveryDays: number;
+  deliveryTimelineOptions: string | null;
+  deliveryTimelineInstructions: string | null;
+  aiBidAmount: number;
+  bidAmountFractions: string | null;
+  bidAmountInstructions: string | null;
+  defaultBidMarkupPct: number | null;
+  bidAmountMarkupInstructions: string | null;
+  roundBidUpTo: number | null;
   createdAt: string;
   updatedAt: string;
 }): AutomationSettings {
@@ -133,9 +177,82 @@ function rowToSettings(row: {
     rejectStaleJobs: (row.rejectStaleJobs ?? 1) === 1,
     rejectIgnoredCountries: (row.rejectIgnoredCountries ?? 1) === 1,
     rejectBadReputation: (row.rejectBadReputation ?? 1) === 1,
+    aiDeliveryTimeline: (row.aiDeliveryTimeline ?? 0) === 1,
+    preferredDeliveryDays: row.preferredDeliveryDays ?? DEFAULT_PREFERRED_DELIVERY_DAYS,
+    // A null column means "never edited" — the UI shows the defaults so the user
+    // has something concrete to change rather than an empty box.
+    deliveryTimelineOptions: parseOptionsColumn(row.deliveryTimelineOptions),
+    deliveryTimelineInstructions: parseInstructionsColumn(
+      row.deliveryTimelineInstructions
+    ),
+    aiBidAmount: (row.aiBidAmount ?? 0) === 1,
+    bidAmountFractions: parseBidAmountFractionsColumn(row.bidAmountFractions),
+    bidAmountInstructions: parseBidAmountInstructionsColumn(row.bidAmountInstructions),
+    defaultBidMarkupPct:
+      typeof row.defaultBidMarkupPct === "number"
+        ? Math.max(0, Math.min(100, Math.round(row.defaultBidMarkupPct)))
+        : DEFAULT_BID_AMOUNT_MARKUP_PCT,
+    bidAmountMarkupInstructions: parseBidAmountMarkupInstructionsColumn(
+      row.bidAmountMarkupInstructions
+    ),
+    roundBidUpTo:
+      typeof row.roundBidUpTo === "number" && Number.isFinite(row.roundBidUpTo)
+        ? Math.max(0, Math.round(row.roundBidUpTo))
+        : 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** The stored options JSON, sanitized; the default list when absent or broken. */
+function parseOptionsColumn(raw: string | null): number[] {
+  if (raw === null || raw.trim().length === 0) {
+    return [...DEFAULT_DELIVERY_TIMELINE_OPTIONS];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return sanitizeDeliveryDaysList(Array.isArray(parsed) ? (parsed as number[]) : null);
+  } catch {
+    return [...DEFAULT_DELIVERY_TIMELINE_OPTIONS];
+  }
+}
+
+/** The stored instructions text; the default text when absent or blank. */
+function parseInstructionsColumn(raw: string | null): string {
+  const text = (raw ?? "").trim();
+  return text.length > 0 ? text : DEFAULT_DELIVERY_TIMELINE_INSTRUCTIONS;
+}
+
+/**
+ * The bid-amount instructions text; the default text when absent or blank.
+ * Reuses the same "non-empty or default" rule as the delivery timeline.
+ */
+function parseBidAmountInstructionsColumn(raw: string | null): string {
+  const text = (raw ?? "").trim();
+  return text.length > 0 ? text : DEFAULT_BID_AMOUNT_INSTRUCTIONS;
+}
+
+/**
+ * The bid-amount markup instructions text; the default text when absent or blank.
+ * Reuses the same "non-empty or default" rule as the other instructions columns.
+ */
+function parseBidAmountMarkupInstructionsColumn(raw: string | null): string {
+  const text = (raw ?? "").trim();
+  return text.length > 0 ? text : DEFAULT_BID_AMOUNT_MARKUP_INSTRUCTIONS;
+}
+
+/**
+ * The stored bid-amount fractions (JSON array of strings in a TEXT column),
+ * sanitized; the default list when absent, empty, or broken.
+ */
+function parseBidAmountFractionsColumn(raw: string | null): string[] {
+  if (raw === null || raw.trim().length === 0) return [...DEFAULT_BID_AMOUNT_FRACTIONS];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return sanitizeBidAmountFractions(Array.isArray(parsed) ? parsed : null);
+  } catch {
+    return [...DEFAULT_BID_AMOUNT_FRACTIONS];
+  }
 }
 
 function rowToRun(row: {
@@ -198,6 +315,16 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
         rejectStaleJobs: true,
         rejectIgnoredCountries: true,
         rejectBadReputation: true,
+        aiDeliveryTimeline: false,
+        preferredDeliveryDays: DEFAULT_PREFERRED_DELIVERY_DAYS,
+        deliveryTimelineOptions: [...DEFAULT_DELIVERY_TIMELINE_OPTIONS],
+        deliveryTimelineInstructions: DEFAULT_DELIVERY_TIMELINE_INSTRUCTIONS,
+        aiBidAmount: false,
+        bidAmountFractions: [...DEFAULT_BID_AMOUNT_FRACTIONS],
+        bidAmountInstructions: DEFAULT_BID_AMOUNT_INSTRUCTIONS,
+        defaultBidMarkupPct: DEFAULT_BID_AMOUNT_MARKUP_PCT,
+        bidAmountMarkupInstructions: DEFAULT_BID_AMOUNT_MARKUP_INSTRUCTIONS,
+        roundBidUpTo: DEFAULT_BID_AMOUNT_ROUND_UP_TO,
         createdAt: now,
         updatedAt: now,
       };
@@ -221,6 +348,17 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
           rejectStaleJobs: defaults.rejectStaleJobs ? 1 : 0,
           rejectIgnoredCountries: defaults.rejectIgnoredCountries ? 1 : 0,
           rejectBadReputation: defaults.rejectBadReputation ? 1 : 0,
+          aiDeliveryTimeline: defaults.aiDeliveryTimeline ? 1 : 0,
+          preferredDeliveryDays: defaults.preferredDeliveryDays,
+          // Stored as JSON so the user's edited list survives a round trip.
+          deliveryTimelineOptions: JSON.stringify(defaults.deliveryTimelineOptions),
+          deliveryTimelineInstructions: defaults.deliveryTimelineInstructions,
+          aiBidAmount: defaults.aiBidAmount ? 1 : 0,
+          bidAmountFractions: JSON.stringify(defaults.bidAmountFractions),
+          bidAmountInstructions: defaults.bidAmountInstructions,
+          defaultBidMarkupPct: defaults.defaultBidMarkupPct,
+          bidAmountMarkupInstructions: defaults.bidAmountMarkupInstructions,
+          roundBidUpTo: defaults.roundBidUpTo,
           createdAt: now,
           updatedAt: now,
         })
@@ -266,6 +404,18 @@ export async function saveSettings(
     for (const [key, value] of Object.entries(settings)) {
       if (typeof value === "boolean") {
         updates[key] = value ? 1 : 0;
+      } else if (key === "deliveryTimelineOptions") {
+        // The one number-array setting: it lives in a TEXT column as JSON, so
+        // it needs serializing (and sanitizing) before Drizzle sees it.
+        updates[key] = JSON.stringify(
+          sanitizeDeliveryDaysList(Array.isArray(value) ? (value as number[]) : null)
+        );
+      } else if (key === "bidAmountFractions") {
+        // The one string-array setting: TEXT column as JSON, serialized +
+        // sanitized so a broken list can never reach the gate.
+        updates[key] = JSON.stringify(
+          sanitizeBidAmountFractions(Array.isArray(value) ? (value as string[]) : null)
+        );
       } else {
         updates[key] = value;
       }
@@ -501,7 +651,7 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
 
     // Bid amount = the project's minimum budget (for hourly projects, its
     // hourly minimum). No budget listed → skip; auto-bid can't price it.
-    const { minimumBudget } = parsedJob;
+    const { minimumBudget, budgetMaximum } = parsedJob;
     if (minimumBudget === null) {
       await logRun(
         userId,
@@ -511,8 +661,20 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
       );
       continue;
     }
-    // Clamp the project minimum within the user's configured safety bounds.
-    const bidAmount = Math.max(settings.minBid, Math.min(settings.maxBid, minimumBudget));
+    // The relevance gate's per-project pick when AI bid-amount selection is
+    // on and it produced one; otherwise the minimum budget plus a user-set
+    // markup percentage of the project maximum, clamped to the safety bounds.
+    const bidAmount = resolveBidAmount(
+      settings,
+      job.bidAmount,
+      minimumBudget,
+      budgetMaximum,
+      parsedJob.projectType
+    );
+
+    // Delivery time: the relevance gate's per-project pick when AI selection is
+    // on and it produced one, otherwise the user's preferred number.
+    const deliveryDays = resolveDeliveryDays(settings, job.deliveryDays);
 
     // Get bidder id and an authenticated client (shared helpers).
     try {
@@ -525,7 +687,7 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
         job.projectId,
         bidderId,
         bidAmount,
-        DEFAULT_BID_PERIOD,
+        deliveryDays,
         DEFAULT_MILESTONE_PERCENTAGE,
         proposal.content
       );
@@ -551,7 +713,7 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
           jobTitle: proposal.jobTitle,
           client: proposal.client,
           amount: bidAmount,
-          period: DEFAULT_BID_PERIOD,
+          period: deliveryDays,
           milestonePercentage: DEFAULT_MILESTONE_PERCENTAGE,
           description: proposal.content,
           status: "submitted",
@@ -568,11 +730,13 @@ export async function runAutoBidCheck(userId: string): Promise<void> {
       await logRun(
         userId,
         "Auto-bid placed",
-        `Project ${job.projectId}: $${bidAmount} (score ${job.matchScore}, ${settings.bidsToday}/${settings.dailyCap} today)`,
+        `Project ${job.projectId}: $${bidAmount}, ${deliveryDays} day${deliveryDays === 1 ? "" : "s"} delivery (score ${job.matchScore}, ${settings.bidsToday}/${settings.dailyCap} today)`,
         "ok"
       );
 
-      log.info(`Auto-bid placed: ${bidId} for project ${job.projectId} at $${bidAmount}`);
+      log.info(
+        `Auto-bid placed: ${bidId} for project ${job.projectId} at $${bidAmount} over ${deliveryDays} day(s)`
+      );
 
       void sendDiscordEvent(
         userId,
@@ -676,10 +840,19 @@ function parseJobRawData(rawData: string | null): {
   projectType: string | null;
   bidPeriod: number | null;
   minimumBudget: number | null;
+  /** The project's maximum budget — used for the default bid markup rule. */
+  budgetMaximum: number | null;
   upgrades?: { featured: boolean; urgent: boolean; sealed: boolean };
 } {
   if (!rawData) {
-    return { description: [], jobSkills: [], projectType: null, bidPeriod: null, minimumBudget: null };
+    return {
+      description: [],
+      jobSkills: [],
+      projectType: null,
+      bidPeriod: null,
+      minimumBudget: null,
+      budgetMaximum: null,
+    };
   }
   try {
     const project = JSON.parse(rawData) as FreelancerProject;
@@ -704,10 +877,23 @@ function parseJobRawData(rawData: string | null): {
         typeof project.budget?.minimum === "number" && project.budget.minimum > 0
           ? project.budget.minimum
           : null,
+      // The project's maximum budget — used for the default markup rule so the
+      // bid can land above the bare minimum when the user has set a markup %.
+      budgetMaximum:
+        typeof project.budget?.maximum === "number" && project.budget.maximum > 0
+          ? project.budget.maximum
+          : null,
       upgrades,
     };
   } catch {
-    return { description: [], jobSkills: [], projectType: null, bidPeriod: null, minimumBudget: null };
+    return {
+      description: [],
+      jobSkills: [],
+      projectType: null,
+      bidPeriod: null,
+      minimumBudget: null,
+      budgetMaximum: null,
+    };
   }
 }
 

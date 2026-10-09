@@ -20,7 +20,12 @@ import { getDb } from "../../db/index.js";
 import { platformCredentials } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { createLogger } from "../../lib/logger.js";
-import type { RelevancyCheck, RelevancyPromptData } from "./ai.service.js";
+import type {
+  BidAmountRequest,
+  DeliveryTimelineRequest,
+  RelevancyCheck,
+  RelevancyPromptData,
+} from "./ai.service.js";
 
 const log = createLogger("analysis");
 
@@ -248,6 +253,9 @@ export function buildJevState(data: RelevancyPromptData): JevState {
     bid_count: String(data.bidCount ?? 0),
     bid_volume: bidVolumeLabel(data.bidCount),
     requires_signature: requiresSignature(client) ? "Yes" : "No",
+    client_requested_deadline: data.bidPeriod
+      ? `${data.bidPeriod} days`
+      : "Not specified",
   };
 }
 
@@ -288,9 +296,148 @@ export const JEV_SCORE_QUESTION: JevQuestion = {
   criteria: [...JEV_SCORE_LEVELS],
 };
 
+/* ------------------------------------------------------------------ *
+ * Delivery timeline question
+ * ------------------------------------------------------------------ */
+
+/**
+ * Task-size wording for the timeline choice, smallest first. The user chooses
+ * which day values are on offer, so these are spread across whatever list they
+ * configured by position rather than tied to specific numbers — the same
+ * even-spacing idea as `JEV_SCORE_LEVELS`, and the reason a custom list like
+ * 2/4/6 still gets sensible per-option wording.
+ */
+const DELIVERY_SIZE_LABELS = [
+  "A small, well-defined task — a bug fix, a small script, one page, or a simple integration.",
+  "A modest task with a few parts — a small feature, a handful of components, or a light integration.",
+  "A medium task — a full small app, several screens, or an integration that needs testing.",
+  "A substantial task — a complete feature set or app with several moving parts.",
+  "A large task — multi-part scope, multiple integrations, or requirements needing clarification.",
+];
+
+/** The size wording for option `index` of `count`, spread across the labels. */
+function deliverySizeLabel(index: number, count: number): string {
+  if (count < 2) return DELIVERY_SIZE_LABELS[2]!;
+  const position = Math.round((index / (count - 1)) * (DELIVERY_SIZE_LABELS.length - 1));
+  return DELIVERY_SIZE_LABELS[position]!;
+}
+
+/**
+ * The timeline question, or null when there is nothing valid to ask.
+ *
+ * A `choice` question is answered by KEY, and the keys here ARE the day values —
+ * so the answer converts straight to a number with no lookup table that could
+ * drift out of step with the user's edited list.
+ */
+export function buildDeliveryPeriodQuestion(
+  timeline: DeliveryTimelineRequest
+): JevQuestion | null {
+  const options = [...new Set(timeline.options)]
+    .filter((days) => Number.isInteger(days) && days > 0)
+    .sort((a, b) => a - b);
+  if (options.length === 0) return null;
+
+  const criteria: Record<string, string> = {};
+  options.forEach((days, index) => {
+    criteria[String(days)] = `${deliverySizeLabel(index, options.length)} Roughly ${days} day${days === 1 ? "" : "s"}.`;
+  });
+
+  return {
+    type: "choice",
+    instructions: `${timeline.instructions}\n\nWhich single delivery time should be quoted for this project, in days? Choose exactly one of the offered values.`,
+    criteria,
+  };
+}
+
+/**
+ * Read a `choice` answer as one of `allowed`. Mirrors how the deciding factor is
+ * read (the key sits on the answer object; a bare string is tolerated in case
+ * the probabilities wrapper is dropped). Null when the answer is missing or is
+ * not one of the offered keys — a bad timeline must never fail the gate.
+ */
+export function readAnswerChoice(
+  answer: unknown,
+  allowed: readonly string[]
+): string | null {
+  const obj =
+    answer !== null && typeof answer === "object"
+      ? (answer as Record<string, unknown>)
+      : {};
+  const candidate = obj["choice"] ?? answer;
+  return typeof candidate === "string" && allowed.includes(candidate)
+    ? candidate
+    : null;
+}
+
+/**
+ * The full question set the gate sends: the two it always asks, plus the
+ * timeline question when the user has that on. Exported so `testers.ts` probes
+ * with the gate's own request — the failure that shape-checking exists to catch
+ * is one where the probe passes and every real screening call is rejected.
+ */
+/**
+ * Build the bid-amount question, or null when there is nothing valid to ask.
+ *
+ * A `choice` question is answered by KEY, and the keys here ARE the dollar values
+ * — so the answer converts straight to a number with no lookup table that could
+ * drift out of step with the user's edited fraction list.
+ */
+export function buildBidAmountQuestion(
+  bidAmount: BidAmountRequest
+): JevQuestion | null {
+  const options = [...new Set(bidAmount.options)]
+    .filter((value) => Number.isInteger(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (options.length === 0) return null;
+
+  const criteria: Record<string, string> = {};
+  options.forEach((value) => {
+    criteria[String(value)] = `Quote $${value} for this project.`;
+  });
+
+  return {
+    type: "choice",
+    instructions: `${bidAmount.instructions}\n\nWhich single bid amount should be quoted for this project, in dollars? Choose exactly one of the offered values.`,
+    criteria,
+  };
+}
+
+export function buildJevGateQuestions(
+  timeline?: DeliveryTimelineRequest,
+  bidAmount?: BidAmountRequest
+): Record<string, JevQuestion> {
+  const questions: Record<string, JevQuestion> = {
+    score: JEV_SCORE_QUESTION,
+    deciding_factor: {
+      type: "choice",
+      instructions:
+        "Which single factor most determined the score you just gave? Choose exactly one.",
+      criteria: FACTOR_CRITERIA,
+    },
+  };
+
+  if (timeline !== undefined) {
+    const question = buildDeliveryPeriodQuestion(timeline);
+    if (question !== null) {
+      questions["delivery_period"] = question;
+    }
+  }
+
+  if (bidAmount !== undefined) {
+    const question = buildBidAmountQuestion(bidAmount);
+    if (question !== null) {
+      questions["bid_amount"] = question;
+    }
+  }
+
+  return questions;
+}
+
 /** Run the relevance gate on Jev and return the shared `RelevancyCheck` shape. */
 export async function checkRelevancyWithJev(
-  data: RelevancyPromptData
+  data: RelevancyPromptData,
+  timeline?: DeliveryTimelineRequest,
+  bidAmount?: BidAmountRequest
 ): Promise<RelevancyCheck> {
   const credRow = getDb()
     .select()
@@ -307,32 +454,40 @@ export async function checkRelevancyWithJev(
   }
 
   const model = readJevModel();
+  const questions = buildJevGateQuestions(timeline, bidAmount);
   const response = await callJevApi(
     decrypt(credRow),
     model,
     buildJevState(data),
-    {
-      score: JEV_SCORE_QUESTION,
-      deciding_factor: {
-        type: "choice",
-        instructions:
-          "Which single factor most determined the score you just gave? Choose exactly one.",
-        criteria: FACTOR_CRITERIA,
-      },
-    }
+    questions
   );
 
-  const { score, factor, confidence } = validateJevGateOutput(response);
+  const { score, factor, confidence, deliveryDays, bidAmount: chosenBidAmount } =
+    validateJevGateOutput(
+      response,
+      timeline === undefined ? null : timeline.options,
+      bidAmount === undefined ? null : bidAmount.options
+    );
+
+  const timelineNote =
+    deliveryDays !== undefined && deliveryDays !== null
+      ? ` timeline=${deliveryDays}d`
+      : "";
+  const bidNote =
+    chosenBidAmount !== undefined && chosenBidAmount !== null
+      ? ` bid=$${chosenBidAmount}`
+      : "";
 
   if (response.usage?.cost !== undefined) {
     log.info(
-      `Jev gate: score=${score} factor=${factor} (model: ${model}, cost: $${response.usage.cost})`,
+      `Jev gate: score=${score} factor=${factor}${timelineNote}${bidNote} (model: ${model}, cost: $${response.usage.cost})`,
       { jobTitle: data.jobTitle }
     );
   } else {
-    log.info(`Jev gate: score=${score} factor=${factor} (model: ${model})`, {
-      jobTitle: data.jobTitle,
-    });
+    log.info(
+      `Jev gate: score=${score} factor=${factor}${timelineNote}${bidNote} (model: ${model})`,
+      { jobTitle: data.jobTitle }
+    );
   }
   if (confidence !== null && confidence < 0.5) {
     log.warn(
@@ -341,7 +496,17 @@ export async function checkRelevancyWithJev(
     );
   }
 
-  return { score, reason: FACTOR_REASONS[factor] };
+  // A missing timeline or bid amount is not a failure: the bid falls back to the
+  // user's preferred delivery time / minimum budget. Only the score and reason
+  // are load-bearing.
+  const result: RelevancyCheck = { score, reason: FACTOR_REASONS[factor] };
+  if (deliveryDays !== undefined) {
+    result.deliveryDays = deliveryDays;
+  }
+  if (chosenBidAmount !== undefined) {
+    result.bidAmount = chosenBidAmount;
+  }
+  return result;
 }
 
 /**
@@ -411,6 +576,16 @@ export interface JevGateResult {
   factor: JevDecidingFactor;
   /** The model's own confidence in its choice, when it reports one. */
   confidence: number | null;
+  /**
+   * The delivery time (days) chosen, when a timeline question was asked. Absent
+   * when the feature is off; null when it was asked but the answer was unusable.
+   */
+  deliveryDays?: number | null;
+  /**
+   * The bid amount (dollars) chosen, when a bid-amount question was asked. Absent
+   * when the feature is off; null when it was asked but the answer was unusable.
+   */
+  bidAmount?: number | null;
 }
 
 function isDecidingFactor(value: unknown): value is JevDecidingFactor {
@@ -423,8 +598,17 @@ function isDecidingFactor(value: unknown): value is JevDecidingFactor {
 /**
  * Validate a Jev gate response before any of it reaches application logic.
  * Anything unusable throws, which is what sends the caller to the LLM fallback.
+ *
+ * `deliveryDayOptions`, when given, means a timeline question was asked: the
+ * answer is read and kept only if it is one of the offered values. An unusable
+ * timeline yields null instead of throwing — it has a safe fallback (the user's
+ * preferred delivery time), and losing a whole screening over it would be worse.
  */
-export function validateJevGateOutput(response: JevResponse): JevGateResult {
+export function validateJevGateOutput(
+  response: JevResponse,
+  deliveryDayOptions?: readonly number[] | null,
+  bidAmountOptions?: readonly number[] | null
+): JevGateResult {
   const answers = response.answers ?? {};
 
   // Jev answers with a position on the level scale, converted to 0-100 here.
@@ -457,5 +641,32 @@ export function validateJevGateOutput(response: JevResponse): JevGateResult {
       ? rawConfidence
       : null;
 
-  return { score, factor, confidence };
+  const base: JevGateResult = { score, factor, confidence };
+
+  if (
+    (deliveryDayOptions === undefined || deliveryDayOptions === null) &&
+    (bidAmountOptions === undefined || bidAmountOptions === null)
+  ) {
+    return base;
+  }
+
+  const result: JevGateResult = { ...base };
+
+  if (deliveryDayOptions !== undefined && deliveryDayOptions !== null) {
+    const chosen = readAnswerChoice(
+      answers["delivery_period"],
+      deliveryDayOptions.map(String)
+    );
+    result.deliveryDays = chosen === null ? null : Number(chosen);
+  }
+
+  if (bidAmountOptions !== undefined && bidAmountOptions !== null) {
+    const chosen = readAnswerChoice(
+      answers["bid_amount"],
+      bidAmountOptions.map(String)
+    );
+    result.bidAmount = chosen === null ? null : Number(chosen);
+  }
+
+  return result;
 }

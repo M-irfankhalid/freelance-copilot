@@ -14,6 +14,14 @@ import { getProfile } from "../profile/profile.service.js";
 import { checkRelevancyWithAI } from "../ai/ai.service.js";
 import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
 import {
+  getBidAmountSettings,
+  getDeliveryTimelineSettings,
+  resolveBidAmountOptions,
+  resolveDefaultBidAmount,
+  roundUpToStep,
+  extractClientMentionedBudget,
+} from "../../lib/delivery-timeline.js";
+import {
   type FreelancerProject,
   type FreelancerBid,
   type JobSearchFilters,
@@ -605,6 +613,47 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
   return summaries;
 }
 
+/**
+ * The bid amount to pre-fill on the manual bid page. The relevance gate's pick
+ * wins when AI bid-amount selection was on at analysis time; otherwise the
+ * default-markup rule (minimum + user's markup% of the project max) is used.
+ * Null when neither is computable (e.g. the project has no usable budget).
+ */
+function computeSuggestedBidAmount(
+  storedBidAmount: number | null | undefined,
+  project: FreelancerProject,
+  userId?: string
+): number | null {
+  if (typeof storedBidAmount === "number" && storedBidAmount > 0) {
+    const rounded = Math.round(storedBidAmount);
+    // Only round fixed-price projects; hourly projects use exact amounts.
+    if (project.type === "fixed") {
+      const bidAmountSettings = getBidAmountSettings(userId ?? "");
+      return roundUpToStep(rounded, bidAmountSettings.roundBidUpTo);
+    }
+    return rounded;
+  }
+
+  // No AI pick — fall back to the default markup formula when budget info is
+  // present. The user's markup setting comes from their automation defaults.
+  const minimum = project.budget?.minimum;
+  if (typeof minimum !== "number" || minimum <= 0 || !Number.isFinite(minimum)) {
+    return null;
+  }
+
+  const bidAmountSettings = getBidAmountSettings(userId ?? "");
+  const base = resolveDefaultBidAmount(
+    minimum,
+    project.budget?.maximum,
+    bidAmountSettings.defaultBidMarkupPct
+  );
+  // Only round fixed-price projects.
+  if (project.type === "fixed") {
+    return roundUpToStep(base, bidAmountSettings.roundBidUpTo);
+  }
+  return Math.round(base);
+}
+
 export async function getJobById(
   projectId: number,
   userId?: string
@@ -696,6 +745,13 @@ export async function getJobById(
     {
       rejectionReason: refreshed.rejectionReason ?? null,
       bidError: refreshed.autoBidError ?? null,
+      deliveryDays: refreshed.deliveryDays ?? null,
+      bidAmount: refreshed.bidAmount ?? null,
+      suggestedBidAmount: computeSuggestedBidAmount(
+        refreshed.bidAmount,
+        project,
+        userId
+      ),
       myBid: userId !== undefined ? findMyBid(userId, projectId) : null,
     }
   );
@@ -803,6 +859,19 @@ export async function analyzeJob(
   // Pre-analysis rejection toggles from Automation (country gate + bad-client gate).
   const gates = getPreanalysisGates(userId);
 
+  // Delivery timeline: only assembled when the user has AI selection on, so
+  // everyone else gets the exact gate they did before (no extra cost, no extra
+  // output key). The chosen days land on the job row and feed auto-bid + the
+  // manual bid page; a missing/unusable answer falls back to the preferred
+  // time at bid time, so a bad pick can never block a job.
+  const timelineSettings = getDeliveryTimelineSettings(userId);
+  const timeline = timelineSettings.aiDeliveryTimeline
+    ? {
+        options: timelineSettings.deliveryTimelineOptions,
+        instructions: timelineSettings.deliveryTimelineInstructions,
+      }
+    : undefined;
+
   // Pre-flight: Freelancer token must be present locally.
   const token = requireFreelancerToken();
   const client = new FreelancerApiClient(token);
@@ -817,6 +886,39 @@ export async function analyzeJob(
       `Failed to fetch job for analysis: ${error instanceof Error ? error.message : "Unknown error"}`
     );
   }
+
+  // Bid amount: only assembled when the user has AI selection on AND the project
+  // has a usable maximum budget (the fraction options resolve to concrete dollar
+  // values against that max). The chosen amount lands on the job row and feeds
+  // auto-bid + the manual bid page; a missing/unusable answer falls back to the
+  // minimum-budget clamp at bid time, so a bad pick can never block a job.
+  const bidAmountSettings = getBidAmountSettings(userId);
+  const bidAmount =
+    bidAmountSettings.aiBidAmount && project.budget?.maximum
+      ? (() => {
+          const minBudget = project.budget?.minimum;
+          const maxBudget = project.budget.maximum;
+          // Extract a client-mentioned budget from the description text (e.g.
+          // "my max budget is $50"), validated to fall within the project's range.
+          const descriptionText = (project.description ?? project.preview_description ?? "");
+          const clientBudget = extractClientMentionedBudget(
+            descriptionText,
+            minBudget,
+            maxBudget
+          );
+          const options = resolveBidAmountOptions(
+            bidAmountSettings.bidAmountFractions,
+            maxBudget,
+            clientBudget
+          );
+          return options !== null
+            ? {
+                options,
+                instructions: bidAmountSettings.bidAmountInstructions,
+              }
+            : undefined;
+        })()
+      : undefined;
 
   // Defense in depth: even if a job slipped through the ingest filter, never
   // spend AI tokens on a country the user asked to exclude — unless the country
@@ -934,24 +1036,30 @@ export async function analyzeJob(
     );
   }
 
-  const check = await checkRelevancyWithAI({
-    jobTitle: project.title ?? "(untitled project)",
-    jobDescription,
-    userSummary: profile.userSummary,
-    relevancyInstructions: profile.relevancyInstructions,
-    client: {
-      country: clientQuality.country,
-      paymentVerified: clientQuality.paymentVerified,
-      emailVerified: clientQuality.emailVerified,
-      depositMade: clientQuality.depositMade,
-      accountAgeLabel: accountAgeLabel(clientQuality),
-      reputationLabel: reputationLabel(clientQuality),
-      upgrades: presentUpgradeLabels(clientQuality),
+  const check = await checkRelevancyWithAI(
+    {
+      jobTitle: project.title ?? "(untitled project)",
+      jobDescription,
+      userSummary: profile.userSummary,
+      relevancyInstructions: profile.relevancyInstructions,
+      client: {
+        country: clientQuality.country,
+        paymentVerified: clientQuality.paymentVerified,
+        emailVerified: clientQuality.emailVerified,
+        depositMade: clientQuality.depositMade,
+        accountAgeLabel: accountAgeLabel(clientQuality),
+        reputationLabel: reputationLabel(clientQuality),
+        upgrades: presentUpgradeLabels(clientQuality),
+      },
+      budgetLabel: formatBudget(project.budget, project.currency?.code),
+      budgetMaximum: project.budget?.maximum ?? null,
+      projectType: project.type ?? null,
+      bidCount: project.bid_stats?.bid_count ?? 0,
+      bidPeriod: project.bidperiod ?? null,
     },
-    budgetLabel: formatBudget(project.budget, project.currency?.code),
-    projectType: project.type ?? null,
-    bidCount: project.bid_stats?.bid_count ?? 0,
-  });
+    timeline,
+    bidAmount
+  );
 
   const trustConcerns = clientTrustConcerns(clientQuality, project.type);
 
@@ -1005,6 +1113,18 @@ export async function analyzeJob(
         analysis: JSON.stringify(storedAnalysis),
         clientQuality: serializeClientQuality(clientQuality),
         lastAnalyzedAt: now,
+        deliveryDays: check.deliveryDays ?? null,
+        // Guard: clamp the AI's bid pick up to the project's minimum budget.
+        // Freelancer.com rejects bids below the stated minimum — this happens
+        // at storage time (not just auto-bid time) so the job record and the
+        // manual bid page both show a valid amount.
+        bidAmount:
+          check.bidAmount !== null && typeof check.bidAmount === "number"
+            ? typeof project.budget?.minimum === "number" &&
+              project.budget.minimum > 0
+              ? Math.max(project.budget.minimum, check.bidAmount)
+              : check.bidAmount
+            : null,
         importedAt: now,
         updatedAt: now,
       })
@@ -1018,6 +1138,14 @@ export async function analyzeJob(
         analysis: JSON.stringify(storedAnalysis),
         clientQuality: serializeClientQuality(clientQuality),
         lastAnalyzedAt: now,
+        deliveryDays: check.deliveryDays ?? null,
+        bidAmount:
+          check.bidAmount !== null && typeof check.bidAmount === "number"
+            ? typeof project.budget?.minimum === "number" &&
+              project.budget.minimum > 0
+              ? Math.max(project.budget.minimum, check.bidAmount)
+              : check.bidAmount
+            : null,
         updatedAt: now,
       })
       .where(eq(jobsTable.projectId, projectId))

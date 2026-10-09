@@ -11,6 +11,7 @@ import {
 } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { createLogger } from "../../lib/logger.js";
+import { getBidAmountSettings } from "../../lib/delivery-timeline.js";
 import { getProfile } from "../profile/profile.service.js";
 import { parseStoredAnalysis } from "../jobs/jobs.service.js";
 import { getDiscordSettings } from "../discord/discord.service.js";
@@ -108,6 +109,24 @@ export interface ActivityEvent {
   timeLabel: string;
 }
 
+export interface BidAmountSettingsSummary {
+  /** Whether the relevance gate picks a bid amount per project. */
+  aiBidAmount: boolean;
+  /** The fraction strings the AI may choose from, e.g. ["1/2","1/3","2/3","full"]. */
+  bidAmountFractions: string[];
+  /** Percentage (0–100) applied to the project max as a markup on the minimum,
+   * when AI selection is off. */
+  defaultBidMarkupPct: number;
+  /** User's min/max bid bounds. */
+  minBid: number;
+  maxBid: number;
+  /** Non-empty guidance text. */
+  bidAmountInstructions: string;
+  bidAmountMarkupInstructions: string;
+  /** Round bid up to nearest N dollars (0 = no rounding). */
+  roundBidUpTo: number;
+}
+
 export interface DashboardSnapshot {
   kpis: KpiMetric[];
   matchQuality: MatchQualitySnapshot;
@@ -117,6 +136,7 @@ export interface DashboardSnapshot {
   bidWinRate: { rate: number; windowLabel: string; submitted: number };
   platforms: PlatformConnection[];
   activity: ActivityEvent[];
+  bidAmount: BidAmountSettingsSummary | null;
 }
 
 /* ------------------------------- Helpers ---------------------------------- */
@@ -526,6 +546,19 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       timeLabel: relativeFromIso(row.time),
     }));
 
+    // Bid-amount settings summary — pure read (defaults when the row is absent).
+    const bidAmountSettings = getBidAmountSettings(userId);
+    const bidAmount: BidAmountSettingsSummary | null = {
+      aiBidAmount: bidAmountSettings.aiBidAmount,
+      bidAmountFractions: bidAmountSettings.bidAmountFractions,
+      defaultBidMarkupPct: bidAmountSettings.defaultBidMarkupPct,
+      minBid: autoRow?.minBid ?? 0,
+      maxBid: autoRow?.maxBid ?? 0,
+      bidAmountInstructions: bidAmountSettings.bidAmountInstructions,
+      bidAmountMarkupInstructions: bidAmountSettings.bidAmountMarkupInstructions,
+      roundBidUpTo: bidAmountSettings.roundBidUpTo,
+    };
+
     return {
       kpis,
       matchQuality,
@@ -535,6 +568,7 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       bidWinRate,
       platforms,
       activity,
+      bidAmount,
     };
   } catch (error) {
     log.error("Failed to compute dashboard snapshot:", {

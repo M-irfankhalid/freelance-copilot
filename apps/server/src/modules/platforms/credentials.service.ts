@@ -13,6 +13,12 @@ import {
   type TestResult,
 } from "./testers.js";
 import { readJevModel } from "../ai/jev.service.js";
+import type { BidAmountRequest, DeliveryTimelineRequest } from "../ai/ai.service.js";
+import {
+  getBidAmountSettings,
+  getDeliveryTimelineSettings,
+  resolveBidAmountOptions,
+} from "../../lib/delivery-timeline.js";
 
 /**
  * Credential storage. Values are encrypted at rest and never leave the
@@ -177,7 +183,7 @@ export async function testStored(id: PlatformId): Promise<TestResult> {
  * being tried out, and a Jev-specific failure should not mark the credential
  * itself as failed.
  */
-export async function testJevEngine(): Promise<TestResult> {
+export async function testJevEngine(userId: string): Promise<TestResult> {
   const row = getDb()
     .select()
     .from(platformCredentials)
@@ -186,7 +192,37 @@ export async function testJevEngine(): Promise<TestResult> {
   if (row === undefined) {
     throw notFound("No OpenRouter key saved yet");
   }
-  return testJevAccess(decrypt(row), readJevModel());
+
+  // Probe with the gate's real question set, including the delivery-timeline and
+  // bid-amount questions when the user has them on — so a rejected shape fails
+  // the button instead of silently 400-ing every real screening call.
+  let timeline: DeliveryTimelineRequest | undefined;
+  const timelineSettings = getDeliveryTimelineSettings(userId);
+  if (timelineSettings.aiDeliveryTimeline) {
+    timeline = {
+      options: timelineSettings.deliveryTimelineOptions,
+      instructions: timelineSettings.deliveryTimelineInstructions,
+    };
+  }
+
+  let bidAmount: BidAmountRequest | undefined;
+  const bidAmountSettings = getBidAmountSettings(userId);
+  if (bidAmountSettings.aiBidAmount) {
+    // Use a round $500 probe max so the fractions resolve to concrete dollar
+    // values — the probe exercises the full bid_amount question shape.
+    const probeOptions = resolveBidAmountOptions(
+      bidAmountSettings.bidAmountFractions,
+      500
+    );
+    if (probeOptions !== null) {
+      bidAmount = {
+        options: probeOptions,
+        instructions: bidAmountSettings.bidAmountInstructions,
+      };
+    }
+  }
+
+  return testJevAccess(decrypt(row), readJevModel(), timeline, bidAmount);
 }
 
 export async function saveCredential(

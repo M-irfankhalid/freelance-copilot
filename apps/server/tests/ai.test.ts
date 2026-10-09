@@ -16,9 +16,13 @@ process.env.ENCRYPTION_KEY ??= "test-master-key-at-least-32-chars-long!!";
 const { applyRelevancyFilter, isCountryIgnored } = await import("../src/modules/ai/relevancy.js");
 const { createApp } = await import("../src/app.js");
 const { closeDb } = await import("../src/db/index.js");
-const { validateRelevancyOutput, validateAnalysisOutput } = await import(
-  "../src/modules/ai/ai.service.js"
-);
+const {
+  validateRelevancyOutput,
+  validateAnalysisOutput,
+  buildRelevancyResponseFormat,
+  readDeliveryDays,
+  readBidAmount,
+} = await import("../src/modules/ai/ai.service.js");
 
 let app: Express;
 let baseUrl: string;
@@ -695,3 +699,152 @@ describe("AI JSON output validation (no JSON mode support)", () => {
     );
   });
 });
+
+describe("relevance gate delivery timeline", () => {
+  const OPTIONS = [1, 3, 5, 7, 10];
+  const answer = (deliveryDays: unknown): string =>
+    JSON.stringify({ score: 80, reason: "Good fit.", deliveryDays });
+
+  it("leaves the output shape untouched when no timeline was requested", () => {
+    // Every existing caller gets the same object it always got — this is what
+    // keeps the pre-feature behavior byte-identical.
+    expect(validateRelevancyOutput(answer(3))).toEqual({ score: 80, reason: "Good fit." });
+    expect(validateRelevancyOutput(answer(3), null)).toEqual({
+      score: 80,
+      reason: "Good fit.",
+    });
+  });
+
+  it("returns the chosen days when they are one of the offered values", () => {
+    expect(validateRelevancyOutput(answer(1), OPTIONS)).toEqual({
+      score: 80,
+      reason: "Good fit.",
+      deliveryDays: 1,
+    });
+  });
+
+  it("nulls a value that was never on offer", () => {
+    expect(validateRelevancyOutput(answer(2), OPTIONS).deliveryDays).toBeNull();
+  });
+
+  it("nulls a missing, malformed, or fractional value", () => {
+    for (const value of [undefined, null, "", "soon", 1.5, {}, []]) {
+      expect(validateRelevancyOutput(answer(value), OPTIONS).deliveryDays).toBeNull();
+    }
+  });
+
+  it("still scores when the timeline is unusable", () => {
+    // A bad pick must never cost us the screening: the job is scored and bids
+    // fall back to the user's preferred days.
+    const parsed = validateRelevancyOutput(answer("nonsense"), OPTIONS);
+    expect(parsed.score).toBe(80);
+  });
+
+  it("reads a numeric string, but only if the value is on offer", () => {
+    expect(readDeliveryDays("10", OPTIONS)).toBe(10);
+    expect(readDeliveryDays(" 3 ", OPTIONS)).toBe(3);
+    expect(readDeliveryDays("2", OPTIONS)).toBeNull();
+    expect(readDeliveryDays("10 days", OPTIONS)).toBeNull();
+    expect(readDeliveryDays(true, OPTIONS)).toBeNull();
+  });
+
+  it("omits the delivery property from the schema unless it is asked for", () => {
+    // `additionalProperties: false` makes an unused property a rejection, so it
+    // has to be absent — not merely unrequested.
+    expect(JSON.stringify(buildRelevancyResponseFormat(null))).not.toContain("deliveryDays");
+    expect(JSON.stringify(buildRelevancyResponseFormat([]))).not.toContain("deliveryDays");
+
+    const schema = buildRelevancyResponseFormat(OPTIONS).json_schema.schema as {
+      properties: Record<string, { enum?: number[] }>;
+      required: string[];
+    };
+    expect(schema.properties["deliveryDays"]?.enum).toEqual(OPTIONS);
+    expect(schema.required).toContain("deliveryDays");
+    expect(schema.required).toContain("score");
+  });
+});
+
+describe("relevance gate bid amount", () => {
+  const OPTIONS = [250, 375, 500, 750];
+  const answer = (bidAmount: unknown): string =>
+    JSON.stringify({ score: 80, reason: "Good fit.", bidAmount });
+
+  it("leaves the output shape untouched when no bid amount was requested", () => {
+    expect(validateRelevancyOutput(answer(500))).toEqual({ score: 80, reason: "Good fit." });
+    expect(validateRelevancyOutput(answer(500), null, null)).toEqual({
+      score: 80,
+      reason: "Good fit.",
+    });
+  });
+
+  it("returns the chosen bid amount when it is one of the offered values", () => {
+    expect(validateRelevancyOutput(answer(375), null, OPTIONS)).toEqual({
+      score: 80,
+      reason: "Good fit.",
+      bidAmount: 375,
+    });
+  });
+
+  it("nulls a value that was never on offer", () => {
+    expect(validateRelevancyOutput(answer(200), null, OPTIONS).bidAmount).toBeNull();
+  });
+
+  it("nulls a missing, malformed, or fractional value", () => {
+    for (const value of [undefined, null, "", "expensive", 250.5, {}, []]) {
+      expect(validateRelevancyOutput(answer(value), null, OPTIONS).bidAmount).toBeNull();
+    }
+  });
+
+  it("still scores when the bid amount is unusable", () => {
+    const parsed = validateRelevancyOutput(answer("nonsense"), null, OPTIONS);
+    expect(parsed.score).toBe(80);
+    expect(parsed.bidAmount).toBeNull();
+  });
+
+  it("reads a numeric string, but only if the value is on offer", () => {
+    expect(readBidAmount("750", OPTIONS)).toBe(750);
+    expect(readBidAmount(" 500 ", OPTIONS)).toBe(500);
+    expect(readBidAmount("200", OPTIONS)).toBeNull();
+    expect(readBidAmount("$500", OPTIONS)).toBeNull();
+    expect(readBidAmount(true, OPTIONS)).toBeNull();
+  });
+
+  it("omits the bidAmount property from the schema unless it is asked for", () => {
+    expect(JSON.stringify(buildRelevancyResponseFormat(null, null))).not.toContain("bidAmount");
+    expect(JSON.stringify(buildRelevancyResponseFormat(null, []))).not.toContain("bidAmount");
+
+    const schema = buildRelevancyResponseFormat(null, OPTIONS).json_schema.schema as {
+      properties: Record<string, { enum?: number[] }>;
+      required: string[];
+    };
+    expect(schema.properties["bidAmount"]?.enum).toEqual(OPTIONS);
+    expect(schema.required).toContain("bidAmount");
+    expect(schema.required).toContain("score");
+  });
+
+  it("supports both delivery timeline and bid amount together in schema and output", () => {
+    const deliveryOptions = [1, 3, 5];
+    const schema = buildRelevancyResponseFormat(deliveryOptions, OPTIONS).json_schema.schema as {
+      properties: Record<string, { enum?: number[] }>;
+      required: string[];
+    };
+    expect(schema.properties["deliveryDays"]?.enum).toEqual(deliveryOptions);
+    expect(schema.properties["bidAmount"]?.enum).toEqual(OPTIONS);
+    expect(schema.required).toContain("deliveryDays");
+    expect(schema.required).toContain("bidAmount");
+
+    const fullAnswer = JSON.stringify({
+      score: 85,
+      reason: "Great match.",
+      deliveryDays: 3,
+      bidAmount: 500,
+    });
+    expect(validateRelevancyOutput(fullAnswer, deliveryOptions, OPTIONS)).toEqual({
+      score: 85,
+      reason: "Great match.",
+      deliveryDays: 3,
+      bidAmount: 500,
+    });
+  });
+});
+

@@ -224,6 +224,16 @@ describe("automation settings", () => {
       expect(settings.rejectStaleJobs).toBe(true);
       expect(settings.rejectIgnoredCountries).toBe(true);
       expect(settings.rejectBadReputation).toBe(true);
+      // Delivery timeline: AI selection off (4 days is what auto-bid hardcoded
+      // before the setting existed), with an editable default list + guidance.
+      expect(settings.aiDeliveryTimeline).toBe(false);
+      expect(settings.preferredDeliveryDays).toBe(4);
+      expect(settings.deliveryTimelineOptions).toEqual([1, 3, 5, 7, 10]);
+      expect(String(settings.deliveryTimelineInstructions)).toMatch(/shortest/i);
+      // Bid amount: AI selection off, defaults to 1/4, 0.5, 0.8, 2, full.
+      expect(settings.aiBidAmount).toBe(false);
+      expect(settings.bidAmountFractions).toEqual(["1/4", "0.5", "0.8", "2", "full"]);
+      expect(String(settings.bidAmountInstructions)).toMatch(/profit/i);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -242,6 +252,13 @@ describe("automation settings", () => {
           rejectStaleJobs: false,
           rejectIgnoredCountries: false,
           rejectBadReputation: false,
+          aiDeliveryTimeline: true,
+          preferredDeliveryDays: 14,
+          deliveryTimelineOptions: [2, 1, 1, 9],
+          deliveryTimelineInstructions: "Quote the shortest honest timeline.",
+          aiBidAmount: true,
+          bidAmountFractions: ["1/4", "1/2", "1/2", "full"],
+          bidAmountInstructions: "Quote the optimal fraction.",
         }),
       });
       expect(res.status).toBe(200);
@@ -252,6 +269,13 @@ describe("automation settings", () => {
           rejectStaleJobs: boolean;
           rejectIgnoredCountries: boolean;
           rejectBadReputation: boolean;
+          aiDeliveryTimeline: boolean;
+          preferredDeliveryDays: number;
+          deliveryTimelineOptions: number[];
+          deliveryTimelineInstructions: string;
+          aiBidAmount: boolean;
+          bidAmountFractions: string[];
+          bidAmountInstructions: string;
         };
       };
       expect(settings.autobidEnabled).toBe(true);
@@ -259,6 +283,70 @@ describe("automation settings", () => {
       expect(settings.rejectStaleJobs).toBe(false);
       expect(settings.rejectIgnoredCountries).toBe(false);
       expect(settings.rejectBadReputation).toBe(false);
+      expect(settings.aiDeliveryTimeline).toBe(true);
+      expect(settings.preferredDeliveryDays).toBe(14);
+      // Stored as JSON in a TEXT column, and normalised on the way through.
+      expect(settings.deliveryTimelineOptions).toEqual([1, 2, 9]);
+      expect(settings.deliveryTimelineInstructions).toBe(
+        "Quote the shortest honest timeline."
+      );
+      expect(settings.aiBidAmount).toBe(true);
+      expect(settings.bidAmountFractions).toEqual(["1/4", "1/2", "full"]);
+      expect(settings.bidAmountInstructions).toBe("Quote the optimal fraction.");
+
+      // Survives a fresh read, not just the PUT response.
+      const again = await realFetch(`${baseUrl}/api/automation`, { headers: authed() });
+      const reread = (await again.json()) as {
+        settings: {
+          deliveryTimelineOptions: number[];
+          bidAmountFractions: string[];
+        };
+      };
+      expect(reread.settings.deliveryTimelineOptions).toEqual([1, 2, 9]);
+      expect(reread.settings.bidAmountFractions).toEqual(["1/4", "1/2", "full"]);
+    } finally {
+      vi.unstubAllGlobals();
+      // Later describes in this file rely on auto-bid being enabled; leave the
+      // timeline off and back on its defaults so they see the older behavior.
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          aiDeliveryTimeline: false,
+          preferredDeliveryDays: 4,
+          deliveryTimelineOptions: [1, 3, 5, 7, 10],
+          aiBidAmount: false,
+          bidAmountFractions: ["1/4", "0.5", "0.8", "2", "full"],
+        }),
+      });
+    }
+  });
+
+  it("rejects a delivery day list with nothing usable in it", async () => {
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ deliveryTimelineOptions: [] }),
+      });
+      // The list is the AI's whole answer space, so an empty one is refused
+      // rather than saved and sanitised into a surprise default later.
+      expect(res.status).toBe(400);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects an empty bid amount fractions list", async () => {
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ bidAmountFractions: [] }),
+      });
+      expect(res.status).toBe(400);
     } finally {
       vi.unstubAllGlobals();
     }

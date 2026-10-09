@@ -58,9 +58,22 @@ export default function JobDetailPage() {
 
   const [proposalText, setProposalText] = useState("");
   const [proposalId, setProposalId] = useState<string | null>(null);
-  const [bidAmount, setBidAmount] = useState("");
+  const [bidAmountText, setBidAmountText] = useState<string | null>(null);
   const [milestonePercentage, setMilestonePercentage] = useState("50");
-  const [deliveryTime, setDeliveryTime] = useState("2 weeks");
+  const [deliveryDaysText, setDeliveryDaysText] = useState<string | null>(null);
+
+  // Bid amount the form starts from: the gate's pick when AI bid-amount selection
+  // was on, or the default-markup amount (min + markup% of max) when it was off.
+  // Held as raw text (null = untouched) so the field can be cleared while editing,
+  // and falls back to empty when no suggestion exists — matching the pre-feature
+  // behaviour.
+  const bidAmountValue =
+    bidAmountText ??
+    (job?.bidAmount != null
+      ? String(job.bidAmount)
+      : job?.suggestedBidAmount != null
+        ? String(job.suggestedBidAmount)
+        : "");
   const [generatingProposal, setGeneratingProposal] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [placingBid, setPlacingBid] = useState(false);
@@ -72,6 +85,19 @@ export default function JobDetailPage() {
   const [refreshedLabel, setRefreshedLabel] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+
+  // Delivery time the bid form starts from: the gate's pick for this project
+  // when AI timeline selection was on at analysis time, else the deadline the
+  // client asked for, else a safe week. Held as raw text (null = untouched) so
+  // the field can be cleared while editing, and anything unparseable falls back
+  // to the suggestion rather than sending a bad period.
+  const suggestedDeliveryDays = job?.deliveryDays ?? job?.bidPeriod ?? 7;
+  const deliveryDaysTextValue = deliveryDaysText ?? String(suggestedDeliveryDays);
+  const typedDeliveryDays = Number(deliveryDaysTextValue);
+  const deliveryDays =
+    Number.isInteger(typedDeliveryDays) && typedDeliveryDays >= 1 && typedDeliveryDays <= 365
+      ? typedDeliveryDays
+      : suggestedDeliveryDays;
 
   // Load any saved proposal for this job so the proposal box shows what the
   // agent already wrote, and regeneration updates it in place.
@@ -217,7 +243,7 @@ export default function JobDetailPage() {
     setPlacingBid(true);
     setBidError(null);
     try {
-      const bidValue = bidAmount ? parseInt(bidAmount.replace(/[^0-9]/g, ""), 10) || 0 : 0;
+      const bidValue = bidAmountValue ? parseInt(bidAmountValue.replace(/[^0-9]/g, ""), 10) || 0 : 0;
       const milestone = Number(milestonePercentage);
       if (!Number.isFinite(milestone) || milestone < 20 || milestone > 100) {
         setBidError("Milestone percentage must be between 20 and 100.");
@@ -261,7 +287,7 @@ export default function JobDetailPage() {
         body: {
           proposalId: pid,
           amount: bidValue,
-          period: job.bidPeriod ?? 7,
+          period: deliveryDays,
           milestonePercentage: milestone,
         },
       });
@@ -281,7 +307,7 @@ export default function JobDetailPage() {
    */
   const handleBidUpdated = (values: UpdateBidValues) => {
     setProposalText(values.description);
-    setBidAmount(String(values.amount));
+    setBidAmountText(String(values.amount));
     setMilestonePercentage(String(values.milestonePercentage));
     refetch();
   };
@@ -455,9 +481,18 @@ export default function JobDetailPage() {
                       type="number"
                       placeholder="e.g. 2500"
                       className="h-9"
-                      value={bidAmount}
-                      onChange={(e) => setBidAmount(e.target.value)}
+                      value={bidAmountValue}
+                      onChange={(e) => setBidAmountText(e.target.value)}
                     />
+                    {job.bidAmount != null ? (
+                      <p className="text-xs text-muted-foreground">
+                        AI suggestion for this project — change it if you disagree.
+                      </p>
+                    ) : job.suggestedBidAmount != null ? (
+                      <p className="text-xs text-muted-foreground">
+                        Suggested from your default markup rule — change it if you disagree.
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="milestone-percentage" className="text-xs font-medium">
@@ -476,17 +511,26 @@ export default function JobDetailPage() {
                     />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="delivery-time" className="text-xs font-medium">Delivery time</Label>
+                    <Label htmlFor="delivery-days" className="text-xs font-medium">Delivery time (days)</Label>
                     <div className="relative h-9">
                       <Clock className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
                       <Input
-                        id="delivery-time"
-                        placeholder="e.g. 2 weeks"
+                        id="delivery-days"
+                        type="number"
+                        min={1}
+                        max={365}
                         className="h-9 pl-8"
-                        value={deliveryTime}
-                        onChange={(e) => setDeliveryTime(e.target.value)}
+                        value={deliveryDaysTextValue}
+                        onChange={(e) => setDeliveryDaysText(e.target.value)}
                       />
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      {job.deliveryDays != null
+                        ? "AI suggestion for this project — change it if you disagree."
+                        : job.bidPeriod != null
+                          ? `The client asked for ${job.bidPeriod} day${job.bidPeriod > 1 ? "s" : ""}.`
+                          : "Your usual delivery time."}
+                    </p>
                   </div>
                 </div>
 
@@ -541,7 +585,7 @@ export default function JobDetailPage() {
               myBid={job.myBid ?? null}
               fallback={{
                 description: proposalText,
-                amount: bidAmount,
+                amount: bidAmountValue,
                 milestonePercentage,
               }}
               onUpdated={handleBidUpdated}

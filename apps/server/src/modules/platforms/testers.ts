@@ -1,6 +1,11 @@
 import { createLogger } from "../../lib/logger.js";
 import { AppError } from "../../lib/errors.js";
-import { callJevApi, JEV_SCORE_QUESTION, readJevScore } from "../ai/jev.service.js";
+import {
+  buildJevGateQuestions,
+  callJevApi,
+  readJevScore,
+} from "../ai/jev.service.js";
+import type { BidAmountRequest, DeliveryTimelineRequest } from "../ai/ai.service.js";
 
 /**
  * Lightweight credential verification against the real services. Each tester
@@ -188,28 +193,39 @@ export async function listOpenRouterModels(
  * minimal round trip. Kept separate from the OpenRouter key test on purpose:
  * the Decisions endpoint is alpha, so saving a key must never depend on it
  * being reachable.
+ *
+ * The probe deliberately mirrors the gate's own request shape, including the
+ * delivery-timeline question when the user has it on — a simpler probe could
+ * report success while every real screening call is rejected (this exact case
+ * happened once when a `score` question was sent without its `criteria`).
  */
 export async function testJevAccess(
   key: string,
-  model: string
+  model: string,
+  timeline?: DeliveryTimelineRequest,
+  bidAmount?: BidAmountRequest
 ): Promise<TestResult> {
   try {
-    // Deliberately the gate's own score question rather than a simpler probe:
-    // a `score` question is rejected without its ordered `criteria` array, so a
-    // probe that skipped it could report success while every real screening
-    // call failed.
+    const questions = buildJevGateQuestions(timeline, bidAmount);
     const response = await callJevApi(
       key,
       model,
       { probe: "Connectivity check from Freelance Copilot." },
-      { score: JEV_SCORE_QUESTION },
+      questions,
       // Shorter than the gate's budget — this runs while the user waits.
       15_000
     );
     // Reading the answer also proves it lands on the 0-100 scale the gate uses.
     const score = readJevScore(response);
-    log.info(`Jev engine reachable (model: ${model}, probe score ${score}/100)`);
-    return { ok: true, message: `Jev is reachable with ${model}` };
+    const extras = [
+      timeline ? "delivery-time selection" : null,
+      bidAmount ? "bid-amount selection" : null,
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    const label = extras ? ` with ${extras}` : "";
+    log.info(`Jev engine reachable (model: ${model}, probe score ${score}/100${label})`);
+    return { ok: true, message: `Jev is reachable with ${model}${label}` };
   } catch (cause) {
     if (cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError")) {
       return { ok: false, message: "Jev did not respond in time" };

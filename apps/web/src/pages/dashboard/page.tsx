@@ -2,6 +2,7 @@ import { ActivityFeedCard } from "@/components/dashboard/activity-feed-card";
 import { ApiStatusChip } from "@/components/dashboard/api-status-chip";
 import { JobsRequiringAttentionCard } from "@/components/dashboard/jobs-attention-card";
 import { KpiCard } from "@/components/dashboard/kpi-card";
+import { BidAmountSettingsCard } from "@/components/dashboard/bid-amount-settings-card";
 import { MatchQualityCard } from "@/components/dashboard/match-quality-card";
 import { PlatformStatusCard } from "@/components/dashboard/platform-status-card";
 import { RecentBidsCard } from "@/components/dashboard/recent-bids-card";
@@ -104,6 +105,9 @@ export default function DashboardPage() {
           className="lg:col-span-2"
         />
         <MatchQualityCard snapshot={snapshot.matchQuality} />
+        {snapshot.bidAmount !== null && (
+          <BidAmountSettingsCard bidAmount={snapshot.bidAmount} />
+        )}
         <RecentProposalsCard
           proposals={snapshot.recentProposals}
           className="lg:col-span-2"

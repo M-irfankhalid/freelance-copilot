@@ -96,6 +96,17 @@ function ensureSchema(db: Database.Database): void {
     if (!jobsColNames.has("auto_bid_error")) {
       db.exec("ALTER TABLE jobs ADD COLUMN auto_bid_error TEXT");
     }
+    // Delivery time the relevance gate picked for this project. Nullable: rows
+    // analyzed before the feature (or with AI timeline selection off) keep no
+    // value and auto-bid falls back to the user's preferred days.
+    if (!jobsColNames.has("delivery_days")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN delivery_days INTEGER");
+    }
+    // Bid amount the relevance gate picked for this project. Nullable: same
+    // fallback semantics as delivery_days (priced off the minimum budget).
+    if (!jobsColNames.has("bid_amount")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN bid_amount INTEGER");
+    }
   }
 
   // Backfill consecutive_errors column on automation_settings (Phase 12).
@@ -119,6 +130,43 @@ function ensureSchema(db: Database.Database): void {
       if (!autoColNames.has(col)) {
         db.exec(`ALTER TABLE automation_settings ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1`);
       }
+    }
+    // Delivery timeline. preferred_delivery_days defaults to 4, which is the
+    // number auto-bid hardcoded before this setting existed.
+    if (!autoColNames.has("ai_delivery_timeline")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN ai_delivery_timeline INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("preferred_delivery_days")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN preferred_delivery_days INTEGER NOT NULL DEFAULT 4");
+    }
+    if (!autoColNames.has("delivery_timeline_options")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN delivery_timeline_options TEXT");
+    }
+    if (!autoColNames.has("delivery_timeline_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN delivery_timeline_instructions TEXT");
+    }
+    // Bid amount. The toggle defaults OFF (0) so every existing install keeps
+    // pricing off the minimum budget until the user turns it on.
+    if (!autoColNames.has("ai_bid_amount")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN ai_bid_amount INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("bid_amount_fractions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_fractions TEXT");
+    }
+    if (!autoColNames.has("bid_amount_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_instructions TEXT");
+    }
+    // Bid amount markup: when AI selection is off, auto-bid prices at the
+    // project minimum plus a percentage of the project maximum.
+    if (!autoColNames.has("default_bid_markup_pct")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN default_bid_markup_pct INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("bid_amount_markup_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_markup_instructions TEXT");
+    }
+    // Round bid up: round the final bid amount to the nearest multiple of N dollars.
+    if (!autoColNames.has("round_bid_up_to")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN round_bid_up_to INTEGER NOT NULL DEFAULT 0");
     }
   }
 
@@ -228,6 +276,8 @@ function ensureSchema(db: Database.Database): void {
       rejection_reason TEXT,
       auto_bid_failed_at TEXT,
       auto_bid_error TEXT,
+      delivery_days INTEGER,
+      bid_amount INTEGER,
       imported_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -304,6 +354,16 @@ function ensureSchema(db: Database.Database): void {
       reject_stale_jobs INTEGER NOT NULL DEFAULT 1,
       reject_ignored_countries INTEGER NOT NULL DEFAULT 1,
       reject_bad_reputation INTEGER NOT NULL DEFAULT 1,
+      ai_delivery_timeline INTEGER NOT NULL DEFAULT 0,
+      preferred_delivery_days INTEGER NOT NULL DEFAULT 4,
+      delivery_timeline_options TEXT,
+      delivery_timeline_instructions TEXT,
+      ai_bid_amount INTEGER NOT NULL DEFAULT 0,
+      bid_amount_fractions TEXT,
+      bid_amount_instructions TEXT,
+      default_bid_markup_pct INTEGER NOT NULL DEFAULT 0,
+      bid_amount_markup_instructions TEXT,
+      round_bid_up_to INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

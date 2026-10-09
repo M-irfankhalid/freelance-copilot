@@ -362,6 +362,23 @@ export interface JobDetailData {
   projectType?: string | null;
   /** Bid period in days, if the project specifies one. */
   bidPeriod?: number | null;
+  /**
+   * Delivery time (days) the relevance gate picked for this project, when AI
+   * timeline selection was on at analysis time. Null otherwise.
+   */
+  deliveryDays?: number | null;
+  /**
+   * Bid amount (dollars) the relevance gate picked for this project, when AI
+   * bid-amount selection was on at analysis time. Null otherwise.
+   */
+  bidAmount?: number | null;
+  /**
+   * Suggested bid amount pre-filled on the manual bid page. When AI bid-amount
+   * selection was on this is the gate's pick; when off it is the default-markup
+   * amount (minimum + the user's markup% of the project max). Null when no
+   * usable suggestion exists.
+   */
+  suggestedBidAmount?: number | null;
   attachments: Array<{ name: string; sizeLabel: string; kind: string }>;
   /** Aggregate competition data from stored bids, if fetched. */
   competition?: CompetitionSummary | null;
@@ -700,10 +717,22 @@ export class FreelancerApiClient {
       rejectionReason: string | null;
       bidError: string | null;
       myBid?: MyBid | null;
+      /** Delivery time (days) the gate picked for this project, if any. */
+      deliveryDays?: number | null;
+      /** Bid amount (dollars) the gate picked for this project, if any. */
+      bidAmount?: number | null;
+      /**
+       * Suggested bid amount shown on the manual bid page. When AI bid-amount
+       * selection was on at analysis time this is the gate's pick; when off it is
+       * the default-markup amount (minimum + markup% of max). Null when neither is
+       * computable (e.g. no usable budget).
+       */
+      suggestedBidAmount?: number | null;
     } = {
       rejectionReason: null,
       bidError: null,
       myBid: null,
+      deliveryDays: null,
     }
   ): JobDetailData {
     const summary = this.mapToJobSummary(project, postedLabel);
@@ -757,6 +786,9 @@ export class FreelancerApiClient {
         : undefined,
       projectType: project.type ?? null,
       bidPeriod: project.bidperiod ?? null,
+      deliveryDays: storedState.deliveryDays ?? null,
+      bidAmount: storedState.bidAmount ?? null,
+      suggestedBidAmount: storedState.suggestedBidAmount ?? null,
       attachments: [],
       competition: competition
         ? {

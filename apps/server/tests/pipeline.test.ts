@@ -27,6 +27,9 @@ const BIDDER_ID = 77124963;
 /** When set, the bid POST for this project returns an upstream rejection. */
 let failBidProjectId: number | null = null;
 
+/** Body of the last bid POSTed to Freelancer.com, for delivery-time assertions. */
+let lastBidBody: Record<string, unknown> | null = null;
+
 /** Project returned by Freelancer.com search and getJobById. */
 const projectDetail = {
   id: PROJECT_ID,
@@ -86,6 +89,11 @@ const bidsResponse = {
   result: { bids: [] },
 };
 
+/**
+ * The gate's answer. `deliveryDays` and `bidAmount` are always present here so
+ * the same stub serves both settings: they are read only when the user has AI
+ * selection on, and ignored otherwise.
+ */
 const openRouterRelevancyResponse = {
   choices: [
     {
@@ -93,6 +101,8 @@ const openRouterRelevancyResponse = {
         content: JSON.stringify({
           score: 92,
           reason: "Excellent match for your React and Node.js skills with a well-scoped SaaS analytics dashboard.",
+          deliveryDays: 1,
+          bidAmount: 600,
         }),
       },
     },
@@ -164,6 +174,7 @@ function stubFetch() {
         try {
           const body = JSON.parse(init?.body as string ?? "{}") as { project_id?: number };
           projectId = body.project_id ?? null;
+          lastBidBody = body as Record<string, unknown>;
         } catch {
           // fall through with no project id
         }
@@ -376,6 +387,10 @@ describe("pipeline run", () => {
       expect(row!.status).toBe("approved");
       expect(row!.content).toContain("React");
       expect(row!.content.length).toBeGreaterThan(50);
+
+      // AI timeline selection is off, so the bid quotes the preferred 4 days —
+      // the same number auto-bid used before the setting existed.
+      expect(lastBidBody?.["period"]).toBe(4);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -574,6 +589,208 @@ describe("pipeline run", () => {
       expect(result2.bidsPlaced).toBe(0);
     } finally {
       failBidProjectId = null;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("bids the delivery time the gate picked when AI timeline selection is on", async () => {
+    const settingsRes = await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        autobidEnabled: true,
+        minMatchScore: 70,
+        // Generous: earlier tests in this file have already spent bids today.
+        dailyCap: 10,
+        aiDeliveryTimeline: true,
+        preferredDeliveryDays: 21,
+        deliveryTimelineOptions: [1, 3, 5, 7, 10],
+      }),
+    });
+    expect(settingsRes.status).toBe(200);
+
+    const timelineProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 4,
+      title: "React bug fix on an existing dashboard",
+      description: "Small React fix: a broken chart tooltip on our dashboard.",
+      preview_description: "Small React fix on our dashboard.",
+      budget: { minimum: 500, maximum: 900, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 1200,
+    };
+    searchResponse.result.projects.push(timelineProject);
+
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { status: string; bidsPlaced: number };
+      expect(result.status).toBe("ok");
+      expect(result.bidsPlaced).toBe(1);
+
+      // The gate's pick (1 day) reaches Freelancer.com as `period`, not the
+      // preferred 21 — that is the whole point of the switch.
+      expect(lastBidBody?.["period"]).toBe(1);
+
+      const { eq } = await import("drizzle-orm");
+      const { getDb } = await import("../src/db/index.js");
+      const { jobs, userBids } = await import("../src/db/schema.js");
+      const jobRow = getDb()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, timelineProject.id))
+        .get();
+      expect(jobRow?.deliveryDays).toBe(1);
+
+      const bidRow = getDb()
+        .select()
+        .from(userBids)
+        .where(eq(userBids.projectId, timelineProject.id))
+        .get();
+      expect(bidRow?.period).toBe(1);
+    } finally {
+      // Leave the shared search fixture as the later tests expect it.
+      searchResponse.result.projects.pop();
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ aiDeliveryTimeline: false, preferredDeliveryDays: 4 }),
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("bids the amount the gate picked when AI bid amount selection is on", async () => {
+    const settingsRes = await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        autobidEnabled: true,
+        minMatchScore: 70,
+        dailyCap: 15,
+        aiBidAmount: true,
+        bidAmountFractions: ["1/3", "2/3", "full"],
+        bidAmountInstructions: "Quote the optimal fraction.",
+      }),
+    });
+    expect(settingsRes.status).toBe(200);
+
+    const bidAmountProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 5,
+      title: "React full-stack SaaS platform",
+      description: "Build a complete SaaS platform with React and Node.js.",
+      preview_description: "SaaS platform with React and Node.js.",
+      budget: { minimum: 400, maximum: 900, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 1500,
+    };
+    searchResponse.result.projects.push(bidAmountProject);
+
+    const { getDb } = await import("../src/db/index.js");
+    const { jobs: jobsTableCheck } = await import("../src/db/schema.js");
+    console.log("PROJECTS IN SEARCH RESPONSE:", searchResponse.result.projects.map(p => p.id));
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { status: string; bidsPlaced: number; jobsFound?: number; analyzed?: number; drafted?: number };
+      const { getDb } = await import("../src/db/index.js");
+      const { automationRuns } = await import("../src/db/schema.js");
+      console.log("AUTOMATION RUNS:", getDb().select().from(automationRuns).all().slice(-5));
+      expect(result.status).toBe("ok");
+      expect(result.bidsPlaced).toBe(1);
+
+      // The gate's pick ($600) reaches Freelancer.com as `amount`, not the minimum budget ($400, clamped $500).
+      expect(lastBidBody?.["amount"]).toBe(600);
+
+      const { eq } = await import("drizzle-orm");
+      const { jobs, userBids } = await import("../src/db/schema.js");
+      const jobRow = getDb()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, bidAmountProject.id))
+        .get();
+      expect(jobRow?.bidAmount).toBe(600);
+
+      const bidRow = getDb()
+        .select()
+        .from(userBids)
+        .where(eq(userBids.projectId, bidAmountProject.id))
+        .get();
+      expect(bidRow?.amount).toBe(600);
+    } finally {
+      searchResponse.result.projects.pop();
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ aiBidAmount: false }),
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rounds the AI-picked bid amount to the nearest step for fixed-price projects", async () => {
+    const settingsRes = await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        autobidEnabled: true,
+        minMatchScore: 70,
+        dailyCap: 15,
+        aiBidAmount: true,
+        bidAmountFractions: ["1/3", "2/3", "full"],
+        bidAmountInstructions: "Quote the optimal fraction.",
+        roundBidUpTo: 10,
+      }),
+    });
+    expect(settingsRes.status).toBe(200);
+
+    // Use a max budget of 905 so the fractions produce non-round options:
+    //   1/3 of 905 = 302, 2/3 of 905 = 603, full = 905
+    // The gate picks 603 (not a multiple of 10) → rounds to 600.
+    const roundProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 5,
+      title: "React full-stack SaaS platform",
+      description: "Build a complete SaaS platform with React and Node.js.",
+      preview_description: "SaaS platform with React and Node.js.",
+      budget: { minimum: 300, maximum: 905, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 1500,
+    };
+    searchResponse.result.projects.push(roundProject);
+
+    const originalContent = openRouterRelevancyResponse.choices[0].message.content;
+    openRouterRelevancyResponse.choices[0].message.content = JSON.stringify({
+      score: 92,
+      reason: "Excellent match.",
+      deliveryDays: 7,
+      bidAmount: 603,
+    });
+
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+
+      // 603 → Math.max(300, 603) = 603 → round to nearest 10 → 600
+      expect(lastBidBody?.["amount"]).toBe(600);
+    } finally {
+      openRouterRelevancyResponse.choices[0].message.content = originalContent;
+      searchResponse.result.projects.pop();
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ aiBidAmount: false, roundBidUpTo: 0 }),
+      });
       vi.unstubAllGlobals();
     }
   });
