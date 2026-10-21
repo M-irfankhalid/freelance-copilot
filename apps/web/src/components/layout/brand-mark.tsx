@@ -1,5 +1,4 @@
-import { Bot } from "lucide-react";
-
+import { BrandLogo } from "@/components/shared/brand-logo";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 
 /**
@@ -11,9 +10,7 @@ export function BrandMark() {
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" className="pointer-events-none">
-          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
-            <Bot className="size-4" aria-hidden />
-          </span>
+          <BrandLogo className="size-8 text-sidebar-foreground" />
           <div className="grid flex-1 text-left leading-tight">
             <span className="truncate font-semibold">Freelance Copilot</span>
             <span className="truncate text-xs text-sidebar-foreground/70">

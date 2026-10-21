@@ -3,9 +3,44 @@ import { z } from "zod";
 
 import { parseBody } from "../../lib/validate.js";
 import { analyzeJob } from "./ai.service.js";
-import { generateUserSummary } from "./summary.service.js";
+import { generateProfileBrief } from "./summary.service.js";
+import {
+  aiSettingsPatchSchema,
+  getAiSettingsView,
+  resetAiSettings,
+  saveAiSettings,
+} from "./ai-settings.service.js";
 
 export const aiRouter = Router();
+
+/** Read the effective AI tuning and model configuration. */
+aiRouter.get("/settings", (req, res, next) => {
+  try {
+    res.json({ settings: getAiSettingsView(req.user!.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Update tuning values and/or model selections. */
+aiRouter.put("/settings", (req, res, next) => {
+  try {
+    const patch = parseBody(aiSettingsPatchSchema, req.body);
+    const result = saveAiSettings(req.user!.id, patch);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Restore tuning defaults while keeping the selected models. */
+aiRouter.post("/settings/reset", (req, res, next) => {
+  try {
+    res.json({ settings: resetAiSettings(req.user!.id) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 /** Analyze a job using the AI with profile-grounded facts. */
 aiRouter.post("/analyze", async (req, res, next) => {
@@ -47,7 +82,7 @@ aiRouter.post("/analyze", async (req, res, next) => {
   }
 });
 
-/** Generate a user summary from the saved profile data. */
+/** Build the deterministic profile brief from saved profile data. */
 aiRouter.post("/summary", async (req, res, next) => {
   try {
     
@@ -58,7 +93,7 @@ aiRouter.post("/summary", async (req, res, next) => {
       }),
       req.body
     );
-    const summary = await generateUserSummary(userId, input.model);
+    const summary = await generateProfileBrief(userId, input.model);
     res.json({ summary });
   } catch (error) {
     next(error);

@@ -109,15 +109,31 @@ const openRouterRelevancyResponse = {
   ],
 };
 
-const openRouterProposalResponse = {
-  choices: [
-    {
-      message: {
-        content: "Hello,\n\nI'm a full-stack developer with extensive experience building React dashboards for SaaS products. I've read your project description carefully and I'm confident I can deliver the analytics dashboard you need.\n\nMy key strengths for this project:\n- React.js: I've built 3+ admin dashboards with React, including real-time data visualization\n- Node.js: My backend expertise will ensure the API layer is scalable and performant\n- I work with a 7-day delivery timeline and offer a 100% satisfaction guarantee\n\nI can start immediately and would love to discuss the details.\n\nBest regards,\nPipeline Tester",
+function proposalResponse(userPrompt: string) {
+  const amount = userPrompt.match(/Bid amount to quote: \$([\d,]+)(\/hour| fixed price)/);
+  const delivery = userPrompt.match(/Delivery to quote: (\d+) days?/);
+  let commercial = "";
+  if (amount && delivery) {
+    commercial = ` I can deliver the first working dashboard in ${delivery[1]} days for $${amount[1]}${amount[2]}.`;
+  } else if (amount) {
+    commercial = ` I can deliver the first working dashboard for $${amount[1]}${amount[2]}.`;
+  } else if (delivery) {
+    commercial = ` I can deliver the first working dashboard in ${delivery[1]} days.`;
+  }
+
+  return {
+    choices: [
+      {
+        message: {
+          content:
+            "Your analytics dashboard needs a dependable data path from ingestion through the charts your team uses. I would start by mapping the event sources and the PostgreSQL schema, then build a queue-based ingestion layer so bursts do not overload the database. Next I would implement the React dashboard shell, connect live updates, and add loading, empty, and error states before polishing the views. I have built React and PostgreSQL dashboards with live chart updates, including the data pipeline and per-account filtering described in my portfolio. I would verify the dashboard against a realistic event volume, document the ingestion checks, and leave a short runbook so your team can operate it confidently." +
+            commercial +
+            " Can we start with a short call to confirm the event sources and the first chart you need live?",
+        },
       },
-    },
-  ],
-};
+    ],
+  };
+}
 
 /**
  * Stub everything except server-local requests. Distinguishes between analysis
@@ -200,8 +216,8 @@ function stubFetch() {
           if (userPrompt.includes("relevance screener")) {
             return new Response(JSON.stringify(openRouterRelevancyResponse), { status: 200 });
           }
-          if (userPrompt.includes("Write a proposal cover message")) {
-            return new Response(JSON.stringify(openRouterProposalResponse), { status: 200 });
+          if (userPrompt.includes("=== VERIFIED PROFILE FACTS ===")) {
+            return new Response(JSON.stringify(proposalResponse(userPrompt)), { status: 200 });
           }
         } catch {
           // fall through
@@ -263,9 +279,6 @@ beforeAll(async () => {
       about: "I build React and Node applications.",
       skills: ["React.js", "Node.js"],
       skillIds: [759, 500],
-      experience: [],
-      portfolio: [],
-      certifications: [],
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
@@ -689,9 +702,6 @@ describe("pipeline run", () => {
     };
     searchResponse.result.projects.push(bidAmountProject);
 
-    const { getDb } = await import("../src/db/index.js");
-    const { jobs: jobsTableCheck } = await import("../src/db/schema.js");
-    console.log("PROJECTS IN SEARCH RESPONSE:", searchResponse.result.projects.map(p => p.id));
     stubFetch();
     try {
       const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
@@ -699,16 +709,14 @@ describe("pipeline run", () => {
         headers: authed(),
       });
       expect(res.status).toBe(200);
-      const result = (await res.json()) as { status: string; bidsPlaced: number; jobsFound?: number; analyzed?: number; drafted?: number };
-      const { getDb } = await import("../src/db/index.js");
-      const { automationRuns } = await import("../src/db/schema.js");
-      console.log("AUTOMATION RUNS:", getDb().select().from(automationRuns).all().slice(-5));
+      const result = (await res.json()) as { status: string; bidsPlaced: number };
       expect(result.status).toBe("ok");
       expect(result.bidsPlaced).toBe(1);
 
       // The gate's pick ($600) reaches Freelancer.com as `amount`, not the minimum budget ($400, clamped $500).
       expect(lastBidBody?.["amount"]).toBe(600);
 
+      const { getDb } = await import("../src/db/index.js");
       const { eq } = await import("drizzle-orm");
       const { jobs, userBids } = await import("../src/db/schema.js");
       const jobRow = getDb()
@@ -765,8 +773,10 @@ describe("pipeline run", () => {
     };
     searchResponse.result.projects.push(roundProject);
 
-    const originalContent = openRouterRelevancyResponse.choices[0].message.content;
-    openRouterRelevancyResponse.choices[0].message.content = JSON.stringify({
+    const relevancyChoice = openRouterRelevancyResponse.choices[0];
+    if (relevancyChoice === undefined) throw new Error("Test fixture has no choices");
+    const originalContent = relevancyChoice.message.content;
+    relevancyChoice.message.content = JSON.stringify({
       score: 92,
       reason: "Excellent match.",
       deliveryDays: 7,
@@ -784,7 +794,7 @@ describe("pipeline run", () => {
       // 603 → Math.max(300, 603) = 603 → round to nearest 10 → 600
       expect(lastBidBody?.["amount"]).toBe(600);
     } finally {
-      openRouterRelevancyResponse.choices[0].message.content = originalContent;
+      relevancyChoice.message.content = originalContent;
       searchResponse.result.projects.pop();
       await realFetch(`${baseUrl}/api/automation`, {
         method: "PUT",

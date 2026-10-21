@@ -44,6 +44,16 @@ export function countUsers(): number {
   return getDb().select({ n: users.id }).from(users).all().length;
 }
 
+/** The single installation owner, or null before signup. */
+export function getOwnerUserId(): string | null {
+  const row = getDb()
+    .select({ id: users.id })
+    .from(users)
+    .limit(1)
+    .get();
+  return row?.id ?? null;
+}
+
 export async function register(input: {
   name: string;
   email: string;

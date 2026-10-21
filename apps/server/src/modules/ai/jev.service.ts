@@ -237,7 +237,7 @@ function yesNo(value: boolean | null | undefined): string {
 export function buildJevState(data: RelevancyPromptData): JevState {
   const client = data.client;
   return {
-    user_summary: data.userSummary?.trim() || "No user summary provided.",
+    user_summary: data.profileBrief?.trim() || "No profile brief provided.",
     relevancy_instructions: data.relevancyInstructions?.trim() || "None.",
     job_title: data.jobTitle,
     job_description: data.jobDescription.join("\n"),
@@ -437,7 +437,8 @@ export function buildJevGateQuestions(
 export async function checkRelevancyWithJev(
   data: RelevancyPromptData,
   timeline?: DeliveryTimelineRequest,
-  bidAmount?: BidAmountRequest
+  bidAmount?: BidAmountRequest,
+  timeoutMs = JEV_TIMEOUT_MS
 ): Promise<RelevancyCheck> {
   const credRow = getDb()
     .select()
@@ -459,7 +460,8 @@ export async function checkRelevancyWithJev(
     decrypt(credRow),
     model,
     buildJevState(data),
-    questions
+    questions,
+    timeoutMs
   );
 
   const { score, factor, confidence, deliveryDays, bidAmount: chosenBidAmount } =

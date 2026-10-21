@@ -107,7 +107,7 @@ export interface AutomationSettings {
   defaultBidMarkupPct: number;
   /** Guidance for the default markup rule. Never empty. */
   bidAmountMarkupInstructions: string;
-  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  /** Round the final bid amount to the nearest multiple of this value (0 = no rounding). */
   roundBidUpTo: number;
   createdAt: string;
   updatedAt: string;
@@ -1220,6 +1220,17 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
           };
           if (job.avgBidLabel) bidStats.avgBid = job.avgBidLabel;
 
+          // Resolve the exact commercial values Step 9 will submit so the
+          // proposal cannot contradict the bid amount or delivery time.
+          const bidAmount = resolveBidAmount(
+            settings,
+            job.bidAmount,
+            parsed.minimumBudget ?? 0,
+            parsed.budgetMaximum,
+            parsed.projectType
+          );
+          const deliveryDays = resolveDeliveryDays(settings, job.deliveryDays);
+
           await generateProposal(
             userId,
             job.id,
@@ -1232,7 +1243,10 @@ async function runPipelineInner(userId: string): Promise<PipelineResult> {
             parsed.projectType,
             parsed.bidPeriod,
             parsed.upgrades,
-            null // competition — not fetched during pipeline draft
+            null, // competition — not fetched during pipeline draft
+            job.budgetLabel,
+            bidAmount,
+            deliveryDays
           );
           drafted++;
 

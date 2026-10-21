@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import {
   CircleCheck,
+  ExternalLink,
   Eye,
   FileText,
+  Loader2,
   ThumbsDown,
   TriangleAlert,
 } from "lucide-react";
@@ -31,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/lib/api/client";
 import { useApi } from "@/lib/api/hooks";
+import { useToast } from "@/components/ui/toast";
 import type { MatchItem } from "@/lib/types";
 
 /**
@@ -42,7 +45,9 @@ export default function MatchesPage() {
   const { data, isLoading, refetch } = useApi<{ matches: MatchItem[] }>(
     "/api/jobs/matches"
   );
+  const { toast } = useToast();
   const [bandFilter, setBandFilter] = useState("all");
+  const [ignoringId, setIgnoringId] = useState<string | null>(null);
   // A job with a placed bid is no longer actionable — hide it from the queue
   // by default, and let the toggle bring the labeled cards back for review.
   const [hideBidded, setHideBidded] = useState(true);
@@ -57,12 +62,25 @@ export default function MatchesPage() {
     return hideBidded ? byBand.filter((match) => !match.bidded) : byBand;
   }, [bandFilter, matches, hideBidded]);
 
-  const ignore = async (jobId: string) => {
+  const ignore = async (jobId: string, title: string) => {
+    if (ignoringId !== null) return;
+    setIgnoringId(jobId);
     try {
       await api<{ ok: true }>(`/api/jobs/${jobId}/ignore`, { method: "POST" });
+      toast({
+        title: "Job ignored",
+        description: `"${title}" was removed from your matches.`,
+        variant: "success",
+      });
       refetch();
-    } catch {
-      // The job stays visible on failure; the toast/error surface is out of scope here.
+    } catch (cause) {
+      toast({
+        title: "Could not ignore job",
+        description: cause instanceof Error ? cause.message : "Unknown error",
+        variant: "error",
+      });
+    } finally {
+      setIgnoringId(null);
     }
   };
 
@@ -199,10 +217,29 @@ export default function MatchesPage() {
               </div>
             </CardContent>
 
-            <CardFooter className="justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => void ignore(match.jobId)}>
-                <ThumbsDown data-icon="inline-start" />
-                Ignore
+            <CardFooter className="flex-wrap justify-end gap-2">
+              <Button variant="ghost" size="sm" asChild>
+                <a
+                  href={`https://www.freelancer.com/projects/${match.projectId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink data-icon="inline-start" />
+                  Show on Freelancer
+                </a>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void ignore(match.jobId, match.title)}
+                disabled={ignoringId !== null}
+              >
+                {ignoringId === match.jobId ? (
+                  <Loader2 data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <ThumbsDown data-icon="inline-start" />
+                )}
+                {ignoringId === match.jobId ? "Ignoring…" : "Ignore"}
               </Button>
               <Button variant="outline" size="sm" asChild>
                 <Link to={`/jobs/${match.jobId}`}>View job</Link>

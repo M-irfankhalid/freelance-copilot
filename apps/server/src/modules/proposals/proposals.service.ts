@@ -7,6 +7,7 @@ import { createLogger } from "../../lib/logger.js";
 import { generateProposalWithAI } from "../ai/ai.service.js";
 import type { ProjectUpgrades, CompetitionData } from "../ai/ai.service.js";
 import { getProfile } from "../profile/profile.service.js";
+import { buildProfileBrief } from "../profile/profile-brief.js";
 import { parseStoredAnalysis } from "../jobs/jobs.service.js";
 import type { StoredAnalysis } from "../jobs/jobs.client.js";
 
@@ -438,7 +439,10 @@ export async function generateProposal(
   projectType?: string | null,
   bidPeriod?: number | null,
   upgrades?: ProjectUpgrades,
-  competition?: CompetitionData | null
+  competition?: CompetitionData | null,
+  budgetLabel?: string | null,
+  bidAmount?: number | null,
+  deliveryDays?: number | null
 ): Promise<{ proposal: ProposalData; competitorNote: string }> {
   try {
     // Prevent duplicate proposals for the same job — return a clean 409
@@ -482,12 +486,16 @@ export async function generateProposal(
         jobTitle,
         jobDescription: description,
         skills: jobSkills,
+        clientName,
+        budgetLabel,
         bidCount: bidStats?.bidCount,
         avgBid: bidStats?.avgBid,
         highBid: bidStats?.highBid,
         lowBid: bidStats?.lowBid,
         projectType,
         bidPeriod,
+        bidAmount,
+        deliveryDays,
         upgrades,
         competition,
         profile: {
@@ -496,15 +504,14 @@ export async function generateProposal(
           hourlyRate: profile.hourlyRate,
           about: profile.about,
           skills: profile.skills,
-          experience: profile.experience,
-          portfolio: profile.portfolio,
-          certifications: profile.certifications,
           wants: profile.wants,
           notWants: profile.notWants,
           customInstructions: profile.customInstructions,
-          userSummary: profile.userSummary,
+          profileBrief: buildProfileBrief(profile),
           portfolioSummary: profile.portfolioSummary,
           proposalTemplates: profile.proposalTemplates,
+          proposalSystemInstructions: profile.proposalSystemInstructions,
+          proposalWritingInstructions: profile.proposalWritingInstructions,
         },
         analysis: analysis
           ? { score: analysis.score, recommendedBidLabel: analysis.recommendedBidLabel, summary: analysis.summary }
@@ -526,7 +533,7 @@ export async function generateProposal(
         projectId,
         jobTitle,
         client: clientName,
-        bidAmount: null,
+        bidAmount: bidAmount ?? null,
         status: "draft",
         content,
         competitorNote,
@@ -545,7 +552,7 @@ export async function generateProposal(
         projectId,
         jobTitle,
         client: clientName,
-        bidAmount: null,
+        bidAmount: bidAmount ?? null,
         status: "draft",
         content,
         competitorNote,
@@ -605,7 +612,10 @@ export async function regenerateProposal(
   projectType?: string | null,
   bidPeriod?: number | null,
   upgrades?: ProjectUpgrades,
-  competition?: CompetitionData | null
+  competition?: CompetitionData | null,
+  budgetLabel?: string | null,
+  bidAmount?: number | null,
+  deliveryDays?: number | null
 ): Promise<{ content: string; competitorNote: string }> {
   try {
     const proposal = await getProposal(userId, proposalId);
@@ -613,19 +623,33 @@ export async function regenerateProposal(
       throw notFound(`Proposal ${proposalId} not found`);
     }
 
+    const profile = getProfile(userId);
+    if (profile === null) {
+      throw new AppError(
+        400,
+        "BAD_REQUEST",
+        "Save your profile before regenerating a proposal"
+      );
+    }
+
     // Reload the job's raw data from the DB cache, if available.
-    // If the job was never stored, proceed with empty context arrays —
-    // generateProposalWithAI loads the profile internally via userId.
+    // If the job was never stored, proceed with empty context arrays.
     let description: string[] = [];
     let jobSkills: string[] = [];
     let bidStats: { bidCount?: number; avgBid?: string } = {};
     let analysis: StoredAnalysis | null = null;
+    let resolvedBudgetLabel = budgetLabel ?? null;
+    let resolvedBidAmount = bidAmount ?? null;
+    let resolvedDeliveryDays = deliveryDays ?? null;
 
     const jobRow = getDb()
       .select({
         rawData: jobsTable.rawData,
+        budgetLabel: jobsTable.budgetLabel,
         bidCount: jobsTable.bidCount,
         avgBidLabel: jobsTable.avgBidLabel,
+        bidAmount: jobsTable.bidAmount,
+        deliveryDays: jobsTable.deliveryDays,
         analysis: jobsTable.analysis,
       })
       .from(jobsTable)
@@ -633,6 +657,9 @@ export async function regenerateProposal(
       .get();
 
     if (jobRow) {
+      resolvedBudgetLabel ??= jobRow.budgetLabel;
+      resolvedBidAmount ??= jobRow.bidAmount;
+      resolvedDeliveryDays ??= jobRow.deliveryDays;
       if (jobRow.rawData) {
         try {
           const project = JSON.parse(jobRow.rawData) as {
@@ -653,34 +680,38 @@ export async function regenerateProposal(
       bidStats = { bidCount: jobRow.bidCount, avgBid: jobRow.avgBidLabel };
       analysis = parseStoredAnalysis(jobRow.analysis);
     }
+    resolvedBidAmount ??= proposal.bidAmount ?? null;
 
     // Call the AI directly (bypasses generateProposal's duplicate check).
-    // generateProposalWithAI loads the profile internally via userId, so we
-    // only need to pass job context.
     const { content, competitorNote } = await generateProposalWithAI(
       {
         jobTitle: proposal.jobTitle,
         jobDescription: description,
         skills: jobSkills,
+        clientName: proposal.client,
+        budgetLabel: resolvedBudgetLabel,
         bidCount: bidStats.bidCount,
         avgBid: bidStats.avgBid,
         projectType,
         bidPeriod,
+        bidAmount: resolvedBidAmount,
+        deliveryDays: resolvedDeliveryDays,
         upgrades,
         competition,
         profile: {
-          name: null,
-          title: null,
-          hourlyRate: null,
-          about: null,
-          skills: [],
-          experience: [],
-          portfolio: [],
-          certifications: [],
-          wants: [],
-          notWants: [],
-          customInstructions: null,
-          userSummary: null,
+          name: profile.name,
+          title: profile.title,
+          hourlyRate: profile.hourlyRate,
+          about: profile.about,
+          skills: profile.skills,
+          wants: profile.wants,
+          notWants: profile.notWants,
+          customInstructions: profile.customInstructions,
+          profileBrief: buildProfileBrief(profile),
+          portfolioSummary: profile.portfolioSummary,
+          proposalTemplates: profile.proposalTemplates,
+          proposalSystemInstructions: profile.proposalSystemInstructions,
+          proposalWritingInstructions: profile.proposalWritingInstructions,
         },
         analysis: analysis
           ? { score: analysis.score, recommendedBidLabel: analysis.recommendedBidLabel, summary: analysis.summary }

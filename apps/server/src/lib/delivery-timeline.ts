@@ -178,9 +178,9 @@ export function resolveDeliveryDays(
  */
 export const DEFAULT_BID_AMOUNT_FRACTIONS: readonly string[] = [
   "1/4",
-  "0.5",
-  "0.8",
-  "2",
+  "1/3",
+  "1/2",
+  "2/3",
   "full",
 ];
 
@@ -202,7 +202,7 @@ export const DEFAULT_BID_AMOUNT_INSTRUCTIONS = [
  */
 export const DEFAULT_BID_AMOUNT_MARKUP_PCT = 0;
 
-/** Round the final bid amount up to the nearest multiple of this value. 0 = no rounding. */
+/** Round the final bid amount to the nearest multiple of this value. 0 = no rounding. */
 export const DEFAULT_BID_AMOUNT_ROUND_UP_TO = 0;
 
 /**
@@ -225,7 +225,7 @@ export interface BidAmountSettings {
   /** Guidance for the default markup rule. Never empty. */
   bidAmountMarkupInstructions: string;
   /**
-   * Round the final bid amount UP to the nearest multiple of this value.
+   * Round the final bid amount to the nearest multiple of this value.
    * 0 or 1 means no rounding (default). E.g. 10 rounds $187 → $190.
    */
   roundBidUpTo: number;
@@ -239,6 +239,25 @@ export const DEFAULT_BID_AMOUNT_SETTINGS: BidAmountSettings = {
   bidAmountMarkupInstructions: DEFAULT_BID_AMOUNT_MARKUP_INSTRUCTIONS,
   roundBidUpTo: DEFAULT_BID_AMOUNT_ROUND_UP_TO,
 };
+
+/**
+ * Whether a string is a usable bid-amount option: `"X/Y"` with 0 < X ≤ Y,
+ * `"full"`, or a positive plain-number multiplier (`0.5`, `2`). Zero values are
+ * rejected — they would put a $0 option in the AI's answer space.
+ */
+export function isValidBidAmountFraction(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.toLowerCase() === "full") return true;
+
+  const match = /^(\d+)\/(\d+)$/.exec(trimmed);
+  if (match !== null) {
+    const numerator = Number(match[1]);
+    const denominator = Number(match[2]);
+    return denominator > 0 && numerator > 0 && numerator <= denominator;
+  }
+
+  return /^\d+(\.\d+)?$/.test(trimmed) && Number(trimmed) > 0;
+}
 
 /**
  * Clean a fraction list: keep only valid `"X/Y"` or `"full"` strings, drop
@@ -256,7 +275,7 @@ export function sanitizeBidAmountFractions(
   for (const value of values) {
     const text = typeof value === "string" ? value.trim() : "";
     if (text.length === 0) continue;
-    if (parseBidAmountFraction(text, 1) !== null) cleaned.push(text);
+    if (isValidBidAmountFraction(text)) cleaned.push(text);
   }
 
   // De-dup case-insensitively while keeping the first-seen spelling.
@@ -293,6 +312,7 @@ export function parseBidAmountFraction(
   if (typeof budgetMaximum !== "number" || budgetMaximum <= 0 || !Number.isFinite(budgetMaximum)) {
     return null;
   }
+  if (!isValidBidAmountFraction(trimmed)) return null;
 
   if (trimmed.toLowerCase() === "full") {
     return Math.round(budgetMaximum);
@@ -303,22 +323,31 @@ export function parseBidAmountFraction(
   if (match !== null) {
     const numerator = Number(match[1]);
     const denominator = Number(match[2]);
-    if (denominator === 0 || numerator < 0 || numerator > denominator) return null;
     return Math.round((budgetMaximum * numerator) / denominator);
   }
 
   // Plain number form: decimal multiplier (0.25, 0.5) or integer multiplier (2, 3)
-  const asNumber = Number(trimmed);
-  if (
-    typeof asNumber === "number" &&
-    Number.isFinite(asNumber) &&
-    asNumber > 0 &&
-    /^\d+(\.\d+)?$/.test(trimmed)
-  ) {
-    return Math.round(budgetMaximum * asNumber);
-  }
+  return Math.round(budgetMaximum * Number(trimmed));
+}
 
-  return null;
+/**
+ * A dollar amount, with optional thousands separators and up to two decimals.
+ * Anchored to a `$` or a currency word by the patterns below, so plain numbers
+ * (page counts, days, versions) are never mistaken for a budget.
+ */
+const BID_AMOUNT_PATTERN = String.raw`(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)`;
+const CLIENT_BUDGET_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`\$\s*${BID_AMOUNT_PATTERN}`, "gi"),
+  new RegExp(String.raw`${BID_AMOUNT_PATTERN}\s*(?:USD|usd|dollars?|dls?)`, "gi"),
+  new RegExp(
+    String.raw`\b(?:budget|price|cost|rate|quote)\b[^\d$]{0,20}\$?\s*${BID_AMOUNT_PATTERN}`,
+    "gi"
+  ),
+];
+
+interface MentionedAmount {
+  value: number;
+  index: number;
 }
 
 /**
@@ -335,29 +364,31 @@ export function extractClientMentionedBudget(
 ): number | null {
   if (!description || (!budgetMinimum && !budgetMaximum)) return null;
 
-  // Match dollar amounts: $50, 50 USD, 50 dollars, 50usd, etc.
-  const regex = /\$?(\d{1,4}(?:[.,]\d{0,2})?)\s*(?:USD|usd|dollars|dollar|dls|dl)?/gi;
-  let match: RegExpExecArray | null;
-  const candidates: number[] = [];
-
-  while ((match = regex.exec(description)) !== null) {
-    const raw = match[1];
-    if (raw === undefined) continue;
-    const value = Number(raw.replace(/[,.]/g, ""));
-    if (Number.isFinite(value) && value > 0) {
-      candidates.push(value);
+  const candidates: MentionedAmount[] = [];
+  for (const pattern of CLIENT_BUDGET_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(description)) !== null) {
+      const raw = match[1];
+      if (raw === undefined) continue;
+      // Remove thousands separators only; the decimal point is significant.
+      const value = Number(raw.replace(/,/g, ""));
+      if (Number.isFinite(value) && value > 0) {
+        candidates.push({ value, index: match.index });
+      }
     }
   }
 
-  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.index - b.index);
 
-  // Find the candidate that falls within the project's budget range.
+  // Find the first candidate that falls within the project's budget range.
   const min = budgetMinimum ?? 0;
   const max = budgetMaximum ?? Number.POSITIVE_INFINITY;
 
   for (const candidate of candidates) {
-    if (candidate >= min && candidate <= max && candidate > 0) {
-      return Math.round(candidate);
+    const rounded = Math.round(candidate.value);
+    if (rounded >= min && rounded <= max && rounded > 0) {
+      return rounded;
     }
   }
 
@@ -380,24 +411,23 @@ export function resolveBidAmountOptions(
   clientMentionedBudget?: number | null
 ): number[] | null {
   if (typeof budgetMaximum !== "number" || budgetMaximum <= 0) return null;
-  const values: number[] = [];
+  // Dedupe the converted amounts: different fraction spellings can resolve to
+  // the same dollar value ("1/2" and "0.5"), and a JSON-schema enum must not
+  // contain duplicates.
+  const values = new Set<number>();
   for (const fraction of fractions) {
     const value = parseBidAmountFraction(fraction, budgetMaximum);
-    if (value !== null) values.push(value);
+    if (value !== null && value > 0) values.add(value);
   }
 
   // Add the client-mentioned budget as an explicit option if it hasn't
   // already been produced by a fraction and falls in a sensible range.
-  if (
-    typeof clientMentionedBudget === "number" &&
-    Number.isFinite(clientMentionedBudget) &&
-    clientMentionedBudget > 0 &&
-    !values.includes(clientMentionedBudget)
-  ) {
-    values.push(clientMentionedBudget);
+  if (typeof clientMentionedBudget === "number" && Number.isFinite(clientMentionedBudget)) {
+    const rounded = Math.round(clientMentionedBudget);
+    if (rounded > 0) values.add(rounded);
   }
 
-  return values.length > 0 ? values : null;
+  return values.size > 0 ? [...values] : null;
 }
 
 /**
@@ -442,6 +472,47 @@ export function getBidAmountSettings(userId: string): BidAmountSettings {
   };
 }
 
+export interface BidAmountBounds {
+  /** Lowest amount auto-bid may submit. */
+  minBid: number;
+  /** Highest amount auto-bid may submit. */
+  maxBid: number;
+}
+
+/**
+ * Read the user's configured auto-bid bounds. A missing row means "not
+ * configured yet", so the manual suggestion is left effectively unbounded —
+ * auto-bid itself creates a row with its own defaults before it runs.
+ */
+export function getBidAmountBounds(userId: string): BidAmountBounds {
+  const fallback: BidAmountBounds = {
+    minBid: 0,
+    maxBid: Number.MAX_SAFE_INTEGER,
+  };
+  if (userId.length === 0) return fallback;
+
+  const row = getDb()
+    .select({
+      minBid: automationSettings.minBid,
+      maxBid: automationSettings.maxBid,
+    })
+    .from(automationSettings)
+    .where(eq(automationSettings.userId, userId))
+    .get();
+
+  if (row === undefined) return fallback;
+
+  const minBid =
+    typeof row.minBid === "number" && Number.isFinite(row.minBid)
+      ? Math.max(0, Math.round(row.minBid))
+      : 0;
+  const maxBid =
+    typeof row.maxBid === "number" && Number.isFinite(row.maxBid) && row.maxBid > 0
+      ? Math.max(minBid, Math.round(row.maxBid))
+      : Number.MAX_SAFE_INTEGER;
+  return { minBid, maxBid };
+}
+
 /**
  * Clamp the round-up setting: must be a non-negative integer. 0 or 1 = no rounding.
  */
@@ -457,9 +528,27 @@ function clampRoundUpTo(value: number | null | undefined): number {
  * or 1, the value is returned unchanged (no rounding). E.g. step=10 rounds
  * $563 → $560, $567 → $570.
  */
-export function roundUpToStep(value: number, step: number): number {
+export function roundToNearestStep(value: number, step: number): number {
   if (step <= 1) return value;
   return Math.round(value / step) * step;
+}
+
+/**
+ * Round a fixed-price bid without dropping below the project's minimum budget.
+ * Nearest rounding can land below the minimum (e.g. $100 with a $30 step gives
+ * $90), which Freelancer.com rejects, so an under-minimum result is bumped to
+ * the next step at or above the minimum. The caller still applies the user's
+ * `[minBid, maxBid]` bounds after this.
+ */
+export function roundFixedBidAmount(
+  value: number,
+  step: number,
+  minimumBudget: number
+): number {
+  if (step <= 1) return Math.max(value, minimumBudget);
+  const rounded = roundToNearestStep(value, step);
+  if (rounded >= minimumBudget) return rounded;
+  return Math.ceil(minimumBudget / step) * step;
 }
 
 /** Clamp a stored markup percentage to [0, 100], defaulting to 0 on bad input. */
@@ -511,11 +600,12 @@ export function resolveDefaultBidAmount(
  * `minimumBudget` so the AI can never produce a bid Freelancer.com would reject
  * (it rejects anything below the project's stated minimum). Every other case
  * falls back to the default markup rule: the project minimum plus a percentage
- * of the project maximum, clamped to the user's `[minBid, maxBid]` bounds — so
- * the bid is never blocked by a missing amount and auto-bid still has
- * `minimumBudget` to price from. Finally, for fixed-price projects only, the
- * result is rounded to the nearest multiple of `roundBidUpTo` (when > 1).
- * Hourly projects skip rounding so the hourly rate precision is preserved.
+ * of the project maximum — so the bid is never blocked by a missing amount and
+ * auto-bid still has `minimumBudget` to price from. For fixed-price projects
+ * only, the result is rounded to the nearest multiple of `roundBidUpTo`
+ * (when > 1), then clamped to `[minBid, maxBid]` so rounding can never push the
+ * bid outside the user's safety bounds. Hourly projects skip rounding so the
+ * hourly rate precision is preserved.
  */
 export function resolveBidAmount(
   settings: Pick<
@@ -545,12 +635,14 @@ export function resolveBidAmount(
       settings.defaultBidMarkupPct
     );
   }
-  const clamped = Math.max(settings.minBid, Math.min(settings.maxBid, amount));
   // Only round fixed-price projects; hourly projects use exact amounts.
-  if (projectType === "fixed") {
-    return roundUpToStep(clamped, settings.roundBidUpTo);
-  }
-  return clamped;
+  const finalAmount =
+    projectType === "fixed"
+      ? roundFixedBidAmount(amount, settings.roundBidUpTo, minimumBudget)
+      : amount;
+  // Apply the safety bounds after rounding so the final value can never escape
+  // them (rounding a clamped value could otherwise land above maxBid).
+  return Math.max(settings.minBid, Math.min(settings.maxBid, finalAmount));
 }
 
 /** Minimal shape of the automation bounds used by `resolveBidAmount`. */

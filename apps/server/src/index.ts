@@ -3,6 +3,7 @@ import { env } from "./env.js";
 import { closeDb } from "./db/index.js";
 import { createLogger } from "./lib/logger.js";
 import { startScheduler, stopScheduler } from "./modules/automation/scheduler.js";
+import { resumeTunnel, stopTunnel } from "./modules/mcp/tunnel-manager.js";
 
 const log = createLogger("system");
 
@@ -18,14 +19,19 @@ const server = app.listen(env.SERVER_PORT, () => {
 // Start the automation scheduler (one-user-per-install model).
 startScheduler();
 
-function shutdown(signal: string): void {
+// Reconnect a tunnel the user left connected. Runs after listen so the status
+// endpoint is available while installation/startup is in progress.
+void resumeTunnel();
+
+async function shutdown(signal: string): Promise<void> {
   log.info(`${signal} received, shutting down`);
   stopScheduler();
+  await stopTunnel();
   server.close(() => {
     closeDb();
     process.exit(0);
   });
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

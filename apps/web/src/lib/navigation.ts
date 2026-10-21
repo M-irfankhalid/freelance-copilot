@@ -1,5 +1,6 @@
 import {
   Bot,
+  BrainCircuit,
   Briefcase,
   FileText,
   Gavel,
@@ -8,6 +9,7 @@ import {
   PlugZap,
   ScrollText,
   Settings,
+  Sparkles,
   Target,
   TrendingUp,
   UserRound,
@@ -18,8 +20,6 @@ export type NavItem = {
   title: string;
   url: string;
   icon: LucideIcon;
-  /** Static demo counters shown until real data exists. */
-  badge?: string;
 };
 
 export type NavGroup = {
@@ -33,9 +33,10 @@ export const navMainGroups: NavGroup[] = [
     title: "Work",
     items: [
       { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-      { title: "Jobs", url: "/jobs", icon: Briefcase, badge: "12" },
-      { title: "Matches", url: "/matches", icon: Target, badge: "8" },
-      { title: "Proposals", url: "/proposals", icon: FileText, badge: "3" },
+      { title: "Agent", url: "/agent", icon: Sparkles },
+      { title: "Jobs", url: "/jobs", icon: Briefcase },
+      { title: "Matches", url: "/matches", icon: Target },
+      { title: "Proposals", url: "/proposals", icon: FileText },
       { title: "Bids", url: "/bids", icon: Gavel },
     ],
   },
@@ -51,6 +52,7 @@ export const navMainGroups: NavGroup[] = [
 /** Account-level sections pinned to the bottom of the sidebar. */
 export const navSecondaryItems: NavItem[] = [
   { title: "Platforms", url: "/platforms", icon: PlugZap },
+  { title: "AI settings", url: "/ai-settings", icon: BrainCircuit },
   { title: "Automation", url: "/automation", icon: Bot },
   { title: "Profile", url: "/profile", icon: UserRound },
   { title: "Settings", url: "/settings", icon: Settings },

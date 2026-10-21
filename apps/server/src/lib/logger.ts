@@ -76,7 +76,7 @@ export function createLogger(category: LogCategory): Logger {
     const time = new Date().toISOString();
     const safeMeta = meta === undefined ? undefined : redact(meta);
     const line = JSON.stringify({ time, level, category, message, meta: safeMeta });
-    if (level === "error") {
+    if (level === "error" || env.LOG_STDOUT === "false") {
       process.stderr.write(line + "\n");
     } else {
       process.stdout.write(line + "\n");

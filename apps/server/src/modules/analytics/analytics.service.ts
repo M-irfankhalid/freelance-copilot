@@ -4,6 +4,7 @@ import { getDb } from "../../db/index.js";
 import { jobs as jobsTable, proposals as proposalsTable, userBids } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { createLogger } from "../../lib/logger.js";
+import { getAiTuningSettings } from "../ai/ai-settings.service.js";
 
 const log = createLogger("system");
 
@@ -48,6 +49,7 @@ function money(amount: number): string {
 export async function getAnalytics(userId: string): Promise<AnalyticsSnapshot> {
   try {
     const db = getDb();
+    const aiSettings = getAiTuningSettings(userId);
 
     // --- Job-level aggregates ---
     const jobsAnalyzed =
@@ -62,7 +64,7 @@ export async function getAnalytics(userId: string): Promise<AnalyticsSnapshot> {
         .select({ count: sql`count(*)` })
         .from(jobsTable)
         .where(
-          sql`${jobsTable.matchScore} >= 80 AND ${jobsTable.status} = 'analyzed'`
+          sql`${jobsTable.matchScore} >= ${aiSettings.strongScoreFloor} AND ${jobsTable.status} = 'analyzed'`
         )
         .get()?.count ?? 0;
 

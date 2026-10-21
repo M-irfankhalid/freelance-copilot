@@ -94,7 +94,7 @@ Everything the agent is allowed to know about the user lives here:
 
 • Name, title, hourly rate, about.
 • Skills, also used as job search keywords.
-• Experience, portfolio, certifications.
+• User summary and portfolio summary, the narrative facts used by the AI.
 • Preferred project types.
 • Wants and not-wants, the job relevancy filters.
 • Custom AI instructions, free form commands the agent must follow when drafting.

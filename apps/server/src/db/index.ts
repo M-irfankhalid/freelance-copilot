@@ -55,7 +55,7 @@ function ensureSchema(db: Database.Database): void {
   }
 
   // Backfill any missing columns on user_profile. We use ALTER TABLE ADD COLUMN
-  // (not DROP) because this table holds user-entered data we must not destroy.
+  // (not DROP) for active data because this table holds user-entered values.
   const profileCols = db
     .prepare("PRAGMA table_info(user_profile)")
     .all() as Array<{ name: string }>;
@@ -66,11 +66,20 @@ function ensureSchema(db: Database.Database): void {
       "skill_ids",
       "ignored_countries",
       "relevancy_instructions",
-      "portfolio_summary",
-      "proposal_templates",
-    ] as const) {
+        "portfolio_summary",
+        "proposal_templates",
+        "proposal_system_instructions",
+        "proposal_writing_instructions",
+      ] as const) {
       if (!profileColNames.has(col)) {
         db.exec(`ALTER TABLE user_profile ADD COLUMN ${col} TEXT`);
+      }
+    }
+    // Structured experience, portfolio, and certifications are no longer part
+    // of the profile. Portfolio details live in portfolio_summary instead.
+    for (const col of ["experience", "portfolio", "certifications"] as const) {
+      if (profileColNames.has(col)) {
+        db.exec(`ALTER TABLE user_profile DROP COLUMN ${col}`);
       }
     }
   }
@@ -227,9 +236,6 @@ function ensureSchema(db: Database.Database): void {
       about TEXT,
       skills TEXT,
       skill_ids TEXT,
-      experience TEXT,
-      portfolio TEXT,
-      certifications TEXT,
       preferred_project_types TEXT,
       wants TEXT,
       not_wants TEXT,
@@ -240,6 +246,8 @@ function ensureSchema(db: Database.Database): void {
       relevancy_instructions TEXT,
       portfolio_summary TEXT,
       proposal_templates TEXT,
+      proposal_system_instructions TEXT,
+      proposal_writing_instructions TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -368,6 +376,24 @@ function ensureSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS ai_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      relevance_temperature REAL NOT NULL DEFAULT 0.2,
+      relevance_max_tokens INTEGER NOT NULL DEFAULT 500,
+      relevance_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+      analysis_temperature REAL NOT NULL DEFAULT 0.2,
+      analysis_max_tokens INTEGER NOT NULL DEFAULT 1000,
+      analysis_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+      proposal_temperature REAL NOT NULL DEFAULT 0.5,
+      proposal_timeout_seconds INTEGER NOT NULL DEFAULT 180,
+      proposal_correction_attempts INTEGER NOT NULL DEFAULT 1,
+      relevance_ignore_floor INTEGER NOT NULL DEFAULT 50,
+      good_score_floor INTEGER NOT NULL DEFAULT 75,
+      strong_score_floor INTEGER NOT NULL DEFAULT 90,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS automation_runs (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -383,6 +409,17 @@ function ensureSchema(db: Database.Database): void {
       webhook_iv TEXT,
       webhook_auth_tag TEXT,
       events TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      tunnel_id TEXT,
+      api_key_cipher_text TEXT,
+      api_key_iv TEXT,
+      api_key_auth_tag TEXT,
+      allow_writes INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
   `);

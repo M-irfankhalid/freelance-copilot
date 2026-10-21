@@ -28,6 +28,8 @@ import { logsRouter } from "./modules/logs/logs.routes.js";
 import { analyticsRouter } from "./modules/analytics/analytics.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { discordRouter } from "./modules/discord/discord.routes.js";
+import { agentRouter } from "./modules/agent/agent.routes.js";
+import { mcpRouter } from "./modules/mcp/mcp.routes.js";
 
 /**
  * Application factory. Modular monolith: feature modules mount their own
@@ -56,6 +58,8 @@ export function createApp(): Express {
   app.use("/api/analytics", requireUser, analyticsRouter);
   app.use("/api/dashboard", requireUser, dashboardRouter);
   app.use("/api/discord", requireUser, discordRouter);
+  app.use("/api/agent", requireUser, agentRouter);
+  app.use("/api/mcp", requireUser, mcpRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

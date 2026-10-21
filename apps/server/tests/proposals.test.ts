@@ -135,19 +135,13 @@ beforeAll(async () => {
       about: "I build React dashboards and Node backends.",
       skills: ["React.js", "Node.js", "PostgreSQL"],
       skillIds: [759, 500, 17],
-      experience: [
-        { role: "Lead Dev", company: "Acme Corp", periodLabel: "2020 – 2023", summary: "Built dashboards" },
-      ],
-      portfolio: [
-        { title: "Sales Dashboard", url: "https://example.com/sales", description: "React + PostgreSQL sales dashboard" },
-      ],
-      certifications: ["AWS Certified"],
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
       ignoredCountries: [],
       customInstructions: "Keep it professional but concise.",
       userSummary: "Experienced in React and Node.js.",
+      portfolioSummary: "### Sales Dashboard\nReact + PostgreSQL sales dashboard, https://example.com/sales",
     }),
   });
   if (profileRes.status !== 200) {
@@ -166,7 +160,8 @@ function authed(extra?: Record<string, string>): Record<string, string> {
 }
 
 /** Set up the standard stub: returns a controlled OpenRouter proposal response. */
-function stubFetchWithAI() {
+function stubFetchWithAI(): { getProposalPrompt: () => string | null } {
+  let lastProposalPrompt: string | null = null;
   setStub({
     "freelancer.com/api/projects/0.1/projects/300001": () =>
       new Response(JSON.stringify({ status: "success", result: projectDetail }), { status: 200 }),
@@ -174,11 +169,14 @@ function stubFetchWithAI() {
       new Response(JSON.stringify(bidsResponse), { status: 200 }),
     "openrouter.ai/api/v1/chat/completions": (_url, init) => {
       const body = JSON.parse((init?.body as string) ?? "{}");
-      const isProposal = body.messages?.some((m: { content?: string }) => m.content?.includes("Write a proposal cover"));
+      const isProposal = body.messages?.some((m: { content?: string }) => m.content?.includes("=== VERIFIED PROFILE FACTS ==="));
       if (isProposal) {
+        lastProposalPrompt =
+          body.messages?.find((m: { content?: string }) => m.content?.includes("=== VERIFIED PROFILE FACTS ==="))
+            ?.content ?? null;
         return new Response(
           JSON.stringify({
-            choices: [{ message: { content: "Hi there,\n\nI've built several real-time analytics dashboards using React and PostgreSQL, including a sales dashboard for Acme Corp that processed live data streams.\n\nFor this project, I would start with a queue-based data ingestion layer, then build the React dashboard with live chart updates. I can deliver a working prototype within 5 days and the full dashboard in 2 weeks.\n\nLet me know if you'd like to discuss the architecture.\n\n— Proposal Tester" } }],
+            choices: [{ message: { content: "Your dashboard needs reliable real-time updates without overloading the database. I would start with a queue-based ingestion layer for the event stream, then build the React dashboard with live chart updates backed by PostgreSQL. I have built several React and PostgreSQL analytics dashboards, including a sales dashboard that processed live data streams and surfaced per-account trends. I would keep the first milestone small: connect the data pipeline, render one live chart, and verify latency under load before expanding the views. Each step would include a short checkpoint so you can see progress before we move on. From there, I would add filtering, loading states, and tests around the ingestion path so the dashboard stays dependable as traffic grows. Could we start with a short call to confirm the event sources and the first dashboard view you want working? — Proposal Tester" } }],
           }),
           { status: 200 }
         );
@@ -192,6 +190,7 @@ function stubFetchWithAI() {
       );
     },
   });
+  return { getProposalPrompt: () => lastProposalPrompt };
 }
 
 describe("proposals", () => {
@@ -277,6 +276,58 @@ describe("proposals", () => {
       expect(gen?.status).toBe("draft");
       expect(gen?.content).toContain("React");
       expect(gen?.competitorNote).toContain("3 bids");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("retries once when the first draft fails validation", async () => {
+    let proposalCalls = 0;
+    setStub({
+      "openrouter.ai/api/v1/chat/completions": (_url, init) => {
+        const body = JSON.parse((init?.body as string) ?? "{}");
+        const isProposal = body.messages?.some((m: { content?: string }) =>
+          m.content?.includes("=== VERIFIED PROFILE FACTS ===")
+        );
+        if (!isProposal) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
+            status: 200,
+          });
+        }
+
+        proposalCalls++;
+        const content =
+          proposalCalls === 1
+            ? "I can build this dashboard and have relevant React experience."
+            : "Your analytics dashboard needs a dependable path from PostgreSQL to the live charts your team uses. I would map the event sources and schema, then build a queue-based ingestion layer so bursts do not overload the database. Next I would implement the React dashboard shell, connect live updates, and add filtering, loading, empty, and error states before polishing the views. I have built React and PostgreSQL dashboards with live chart updates and per-account filters similar to the work in my portfolio. I would test against realistic event volume, document the ingestion checks, and leave a short, practical runbook for handoff. I can deliver the dashboard in 7 days for $1,800. Can we start with a short call to confirm the event sources and the first chart you need live?";
+        return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+          status: 200,
+        });
+      },
+    });
+
+    try {
+      const response = await realFetch(`${baseUrl}/api/proposals/generate`, {
+        method: "POST",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          jobId: `job-${PROJECT_ID}-retry`,
+          projectId: PROJECT_ID,
+          jobTitle: "Build a React analytics dashboard",
+          clientName: "Client",
+          description: ["React dashboard with PostgreSQL and live charts."],
+          jobSkills: ["React.js", "PostgreSQL"],
+          projectType: "fixed",
+          bidAmount: 1800,
+          deliveryDays: 7,
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(proposalCalls).toBe(2);
+      const body = (await response.json()) as { proposal: { content: string } };
+      expect(body.proposal.content).toContain("7 days");
+      expect(body.proposal.content).toContain("$1,800");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -405,7 +456,7 @@ describe("proposals", () => {
   });
 
   it("regenerates a proposal with fresh context", async () => {
-    stubFetchWithAI();
+    const stub = stubFetchWithAI();
     try {
       const genRes = await realFetch(`${baseUrl}/api/proposals/generate`, {
         method: "POST",
@@ -435,6 +486,11 @@ describe("proposals", () => {
       const regenBody = (await regenRes.json()) as { proposal: { content: string } };
       expect(regenBody.proposal.content).toContain("React");
       expect(regenBody.proposal.content.length).toBeGreaterThan(50);
+      const regenPrompt = stub.getProposalPrompt();
+      expect(regenPrompt).toContain("Keep it professional but concise.");
+      expect(regenPrompt).toContain("Sales Dashboard");
+      expect(regenPrompt).toContain("React.js, Node.js, PostgreSQL");
+      expect(regenPrompt).not.toContain("Experienced in React and Node.js.");
     } finally {
       vi.unstubAllGlobals();
     }

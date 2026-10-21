@@ -70,6 +70,12 @@ pnpm dev
 
 The API serves on `http://localhost:4000` and the web app on `http://localhost:5173`.
 
+## MCP
+
+A local stdio MCP server exposes the profile, jobs, proposals, quality checks,
+and draft-only edits to ChatGPT (through Secure MCP Tunnel) and other MCP
+clients. See [docs/mcp.md](docs/mcp.md) for setup, safety, and tool details.
+
 > Docker packaging is planned but not yet shipped.
 
 ## Maintainer

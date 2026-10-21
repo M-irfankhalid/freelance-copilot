@@ -83,16 +83,13 @@ const validProfile = {
   about: "I build things.",
   skills: ["React", "Node.js"],
   skillIds: [759, 500],
-  experience: [
-    { role: "Dev", company: "Self", periodLabel: "2021 – now", summary: null },
-  ],
-  portfolio: [],
-  certifications: [],
   preferredProjectTypes: ["Fixed price"],
   wants: ["React"],
   notWants: ["crypto"],
   ignoredCountries: [],
   customInstructions: "Keep it short.",
+  proposalSystemInstructions: "Use my saved system prompt.",
+  proposalWritingInstructions: "Write like this.",
 };
 
 describe("profile", () => {
@@ -121,7 +118,77 @@ describe("profile", () => {
     const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
     const body = (await get.json()) as { profile: typeof validProfile | null };
     expect(body.profile?.skills).toEqual(["React", "Node.js"]);
-    expect(body.profile?.experience[0]?.role).toBe("Dev");
+    expect(body.profile?.proposalSystemInstructions).toBe(
+      "Use my saved system prompt."
+    );
+    expect(body.profile?.proposalWritingInstructions).toBe("Write like this.");
+  });
+
+  it("returns a deterministic AI brief instead of the stored user summary", async () => {
+    const response = await realFetch(`${baseUrl}/api/profile`, {
+      headers: authed(),
+    });
+    const body = (await response.json()) as {
+      aiBrief: string | null;
+      writerDefaults: { proposalSystemInstructions: string };
+    };
+    expect(body.aiBrief).toContain("Test Owner");
+    expect(body.aiBrief).toContain("React");
+    expect(body.aiBrief).not.toContain("Keep it short.");
+    expect(body.writerDefaults.proposalSystemInstructions).toContain(
+      "expert freelance proposal writer"
+    );
+
+    const summary = await realFetch(`${baseUrl}/api/ai/summary`, {
+      method: "POST",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({}),
+    });
+    expect(summary.status).toBe(200);
+    const summaryBody = (await summary.json()) as { summary: string };
+    expect(summaryBody.summary).toContain("Full-stack developer");
+  });
+
+  it("uses editable defaults until writer instructions are explicitly cleared", async () => {
+    const putNull = await realFetch(`${baseUrl}/api/profile`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        ...validProfile,
+        proposalSystemInstructions: null,
+        proposalWritingInstructions: null,
+      }),
+    });
+    expect(putNull.status).toBe(200);
+
+    const defaults = (await (
+      await realFetch(`${baseUrl}/api/profile`, { headers: authed() })
+    ).json()) as {
+      profile: { proposalSystemInstructions: string; proposalWritingInstructions: string };
+    };
+    expect(defaults.profile.proposalSystemInstructions).toContain(
+      "expert freelance proposal writer"
+    );
+    expect(defaults.profile.proposalWritingInstructions).toContain("HOW TO WRITE IT");
+
+    const clear = await realFetch(`${baseUrl}/api/profile`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        ...validProfile,
+        proposalSystemInstructions: "",
+        proposalWritingInstructions: "",
+      }),
+    });
+    expect(clear.status).toBe(200);
+
+    const cleared = (await (
+      await realFetch(`${baseUrl}/api/profile`, { headers: authed() })
+    ).json()) as {
+      profile: { proposalSystemInstructions: string; proposalWritingInstructions: string };
+    };
+    expect(cleared.profile.proposalSystemInstructions).toBe("");
+    expect(cleared.profile.proposalWritingInstructions).toBe("");
   });
 
   it("rejects invalid profiles with field details", async () => {
@@ -171,43 +238,6 @@ describe("profile", () => {
             { status: 200 }
           );
         }
-        if (url.includes("freelancer.com/api/users/0.1/portfolios")) {
-          // Portfolios endpoint returns projects the user has added to their
-          // Freelancer portfolio, with title, description, and files.
-          return new Response(
-            JSON.stringify({
-              status: "success",
-              result: {
-                portfolios: {
-                  "77124963": [
-                    {
-                      id: 12062244,
-                      title: "AroundU.Social - Location-Based App",
-                      description: "Location-based social web app built with MERN stack.",
-                      files: [
-                        {
-                          cdn_url: "//cdn2.f-cdn.com/files/download/123456/screenshot.png",
-                          thumbnails: [{ cdn_url: "//cdn6.f-cdn.com/files/download/123456/thumb.jpg" }],
-                        },
-                      ],
-                    },
-                    {
-                      id: 12418902,
-                      title: "Figma to Next.js Landing Page",
-                      description: "Pixel-perfect landing page from Figma design.",
-                      files: [
-                        {
-                          cdn_url: "//cdn3.f-cdn.com/files/download/789012/landing.png",
-                        },
-                      ],
-                    },
-                  ],
-                },
-              },
-            }),
-            { status: 200 }
-          );
-        }
         return new Response("not found", { status: 404 });
       })
     );
@@ -226,7 +256,6 @@ describe("profile", () => {
           about: string | null;
           skills: string[];
           skillIds: number[];
-          portfolio: { title: string; url: string | null; description: string | null }[];
         };
       };
       expect(body.profile.freelancerUsername).toBe("irfan_dev");
@@ -237,11 +266,6 @@ describe("profile", () => {
       expect(body.profile.about).toBe("Full-stack developer with 5 years experience.");
       expect(body.profile.skills).toEqual(["JavaScript", "React.js", "Node.js"]);
       expect(body.profile.skillIds).toEqual([9, 759, 500]);
-      // Portfolios fetched from a separate /portfolios/ API call, mapped to title/url/description.
-      expect(body.profile.portfolio).toHaveLength(2);
-      expect(body.profile.portfolio[0]?.title).toBe("AroundU.Social - Location-Based App");
-      expect(body.profile.portfolio[0]?.description).toBe("Location-based social web app built with MERN stack.");
-      expect(body.profile.portfolio[0]?.url).toBe("https://cdn2.f-cdn.com/files/download/123456/screenshot.png");
       // Nothing was stored by the import itself.
       const get = await realFetch(`${baseUrl}/api/profile`, { headers: authed() });
       const after = (await get.json()) as { profile: { title: string | null } | null };

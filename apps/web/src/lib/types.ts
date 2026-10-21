@@ -121,15 +121,15 @@ export interface JobDetailData extends JobSummary {
    */
   deliveryDays?: number | null;
   /**
-   * Bid amount (dollars) the relevance gate picked for this project, when AI
-   * bid-amount selection was on at analysis time. Null otherwise.
+   * Bid amount (dollars) the relevance gate picked for this project, only while
+   * AI bid-amount selection is enabled. Null otherwise.
    */
   bidAmount?: number | null;
   /**
    * Suggested bid amount pre-filled on the manual bid page. When AI bid-amount
-   * selection was on this is the gate's pick; when off it is the default-markup
-   * amount (minimum + the user's markup% of the project max). Null when no
-   * usable suggestion exists.
+   * selection is enabled this is the gate's pick (if it made one); otherwise it
+   * is the default-markup amount. Rounded and clamped to the user's bounds.
+   * Null when no usable suggestion exists.
    */
   suggestedBidAmount?: number | null;
   attachments: JobAttachment[];
@@ -158,6 +158,7 @@ export interface JobDetailData extends JobSummary {
 export interface MatchItem {
   id: string;
   jobId: string;
+  projectId: number;
   title: string;
   client: string;
   budgetLabel: string;
@@ -283,6 +284,8 @@ export interface CredentialSummary {
   analysisModelId: string | null;
   /** Model used for proposal writing (strong). */
   proposalModelId: string | null;
+  /** Model used for the in-app agent chat (must support tool calling). */
+  agentModelId: string | null;
   /** Engine behind the relevance gate: the chat model or the Jev decision model. */
   analysisEngine: "llm" | "jev";
   /** Jev model id, when the relevance gate runs on Jev. */
@@ -321,6 +324,28 @@ export interface OpenRouterState {
   models: AiModelOption[];
   creditLabel: string;
   usageThisMonthLabel: string;
+}
+
+/** Effective AI tuning plus the models/engine selected on Platforms. */
+export interface AiSettings {
+  relevanceTemperature: number;
+  relevanceMaxTokens: number;
+  relevanceTimeoutSeconds: number;
+  analysisTemperature: number;
+  analysisMaxTokens: number;
+  analysisTimeoutSeconds: number;
+  proposalTemperature: number;
+  proposalTimeoutSeconds: number;
+  proposalCorrectionAttempts: number;
+  relevanceIgnoreFloor: number;
+  goodScoreFloor: number;
+  strongScoreFloor: number;
+  analysisModelId: string;
+  proposalModelId: string;
+  agentModelId: string;
+  analysisEngine: "llm" | "jev";
+  jevModelId: string;
+  updatedAt: string | null;
 }
 
 export interface AutomationSettings {
@@ -400,20 +425,43 @@ export interface DiscordSettings {
   events: DiscordEvent[];
 }
 
+/* ------------------------------- MCP / ChatGPT --------------------------- */
+
+export type McpTunnelState =
+  | "not_configured"
+  | "disconnected"
+  | "starting"
+  | "connected"
+  | "error";
+
+/** Secure MCP Tunnel settings as returned by the API — never the runtime key. */
+export interface McpSettings {
+  configured: boolean;
+  tunnelId: string | null;
+  /** Masked runtime key, e.g. "sk-…". */
+  apiKeyPreview: string | null;
+  allowWrites: boolean;
+  enabled: boolean;
+  updatedAt: string | null;
+}
+
+export interface McpStatus {
+  state: McpTunnelState;
+  running: boolean;
+  ready: boolean;
+  installed: boolean;
+  clientVersion: string | null;
+  healthUrl: string | null;
+  lastError: string | null;
+  startedAt: string | null;
+}
+
+export interface McpState {
+  settings: McpSettings;
+  status: McpStatus;
+}
+
 /* --------------------------------- Profile ------------------------------- */
-
-export interface ProfileExperience {
-  role: string;
-  company: string;
-  periodLabel: string;
-  summary: string;
-}
-
-export interface ProfilePortfolioItem {
-  title: string;
-  url: string;
-  description: string;
-}
 
 export interface UserProfile {
   name: string;
@@ -425,9 +473,6 @@ export interface UserProfile {
   skills: string[];
   /** Numeric Freelancer.com skill IDs paired 1:1 with skills. */
   skillIds?: number[];
-  experience: ProfileExperience[];
-  portfolio: ProfilePortfolioItem[];
-  certifications: string[];
   preferredProjectTypes: string[];
   wants: string[];
   notWants: string[];
@@ -442,6 +487,10 @@ export interface UserProfile {
   portfolioSummary?: string;
   /** Markdown block holding all proposal templates, used during proposal generation. */
   proposalTemplates?: string;
+  /** Editable system prompt for the proposal writer. */
+  proposalSystemInstructions?: string;
+  /** Editable pre-instructions placed before profile facts in the proposal prompt. */
+  proposalWritingInstructions?: string;
 }
 
 /* -------------------------------- Dashboard ------------------------------ */

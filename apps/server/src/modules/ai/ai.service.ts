@@ -1,28 +1,30 @@
 import { AppError } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
 import { getDb } from "../../db/index.js";
-import { platformCredentials, userProfile } from "../../db/schema.js";
+import { platformCredentials } from "../../db/schema.js";
 import { eq } from "drizzle-orm";
 import { createLogger } from "../../lib/logger.js";
+import { getProfile } from "../profile/profile.service.js";
+import { buildProfileBrief } from "../profile/profile-brief.js";
 import { applyRelevancyFilter } from "./relevancy.js";
 import { checkRelevancyWithJev, readAnalysisEngine } from "./jev.service.js";
-import { getProfile } from "../profile/profile.service.js";
+import {
+  DEFAULT_AI_MODEL,
+  getAiTuningSettings,
+} from "./ai-settings.service.js";
+import {
+  evaluateProposalQuality,
+  extractUrls,
+} from "../../lib/proposal-quality.js";
 
 const log = createLogger("analysis");
 
-/** The model we use when the user has not picked one. */
-const DEFAULT_MODEL = "openai/gpt-4o-mini";
-
-
 /**
- * Output-token cap for the fast relevance gate (Model A). It returns one score
- * plus a short reason, so a generous-but-finite cap stops a verbose model from
- * padding the bill on what is meant to be a cheap call.
+ * Minimum proposal length treated as a truncated/failed generation. Style,
+ * length, price, delivery, and closing preferences all live in the editable
+ * proposal instructions stored on the profile.
  */
-const RELEVANCE_MAX_TOKENS = 500;
-
-/** Output-token cap for the full job analysis. Bounds the deep-analysis call. */
-const ANALYSIS_MAX_TOKENS = 1000;
+const PROPOSAL_MIN_CONTENT_WORDS = 40;
 
 /**
  * OpenAI-style `response_format` that asks the provider to enforce a JSON
@@ -288,12 +290,12 @@ export interface RelevancyClientData {
   upgrades?: string[];
 }
 
-/** Inputs the relevance model sees: title, description, user summary, trust data. */
+/** Inputs the relevance model sees: title, description, profile brief, trust data. */
 export interface RelevancyPromptData {
   jobTitle: string;
   jobDescription: string[];
-  /** Verified user summary from the profile. */
-  userSummary?: string | null;
+  /** Deterministic brief built from the saved profile. */
+  profileBrief?: string | null;
   /** Free-text relevancy instructions, e.g. "no web3 or WordPress". */
   relevancyInstructions?: string | null;
   /** Client trust signals, if known. */
@@ -343,6 +345,10 @@ export interface ProposalPromptData {
   jobTitle: string;
   jobDescription: string[];
   skills: string[];
+  /** Client display label, e.g. "Client in Germany". */
+  clientName?: string | null;
+  /** Human-readable project budget range, e.g. "$30 - $250". */
+  budgetLabel?: string | null;
   bidCount?: number;
   avgBid?: string;
   highBid?: string;
@@ -351,6 +357,10 @@ export interface ProposalPromptData {
   projectType?: string | null;
   /** Bid period in days, if specified. */
   bidPeriod?: number | null;
+  /** The exact amount the bid will submit, when already chosen. */
+  bidAmount?: number | null;
+  /** The exact delivery time the bid will submit, when already chosen. */
+  deliveryDays?: number | null;
   /** Upgrade flags (featured, urgent, sealed). */
   upgrades?: ProjectUpgrades;
   /** Aggregate competition data from stored bids, if fetched. */
@@ -362,17 +372,19 @@ export interface ProposalPromptData {
     hourlyRate: string | null;
     about: string | null;
     skills: string[];
-    experience: Array<{ role: string; company: string; periodLabel: string; summary?: string | null }>;
-    portfolio: Array<{ title: string; url?: string | null; description?: string | null }>;
-    certifications: string[];
     wants: string[];
     notWants: string[];
     customInstructions: string | null;
-    userSummary?: string | null;
+    /** Deterministic fact sheet built from the saved profile. */
+    profileBrief?: string | null;
     /** Markdown summary of the user's portfolio projects. */
     portfolioSummary?: string | null;
     /** Markdown block holding all the user's proposal templates. */
     proposalTemplates?: string | null;
+    /** Editable system prompt for the proposal writer. */
+    proposalSystemInstructions?: string | null;
+    /** Editable instructions placed before the profile facts. */
+    proposalWritingInstructions?: string | null;
   };
   /** The AI analysis result for this job, if previously analyzed. */
   analysis?: {
@@ -390,18 +402,35 @@ export interface ProposalPromptData {
 export function buildProposalPrompt(data: ProposalPromptData): string {
   const p = data.profile;
   const skillsText = p.skills.length ? p.skills.join(", ") : "No skills listed";
-  const experienceLines = p.experience.length
-    ? p.experience.map((e) => `  • ${e.role} at ${e.company} (${e.periodLabel})${e.summary ? ` — ${e.summary}` : ""}`).join("\n")
-    : "  (No experience entries on file)";
-  const portfolioLines = p.portfolio.length
-    ? p.portfolio.map((item) => `  • "${item.title}"${item.description ? ` — ${item.description}` : ""}${item.url ? ` (${item.url})` : ""}`).join("\n")
-    : "  (No portfolio items on file)";
-  const certsText = p.certifications.length ? p.certifications.join(", ") : "None listed";
   const customInstr = p.customInstructions?.trim() || "No proposal instructions set.";
   const portfolioSummaryText = p.portfolioSummary?.trim() || "No portfolio summary provided.";
   const templatesText = p.proposalTemplates?.trim() || "No proposal templates provided.";
+  const preInstructions = p.proposalWritingInstructions?.trim() ?? "";
+  const profileFacts =
+    p.profileBrief?.trim() ||
+    [
+      `Name: ${p.name || "Not set"}`,
+      `Title: ${p.title || "Not set"}`,
+      `Hourly rate: ${p.hourlyRate || "Not set"}`,
+      `About: ${p.about || "No description provided"}`,
+      `Skills: ${skillsText}`,
+      `Portfolio summary:\n${portfolioSummaryText}`,
+    ].join("\n");
 
-  const competitionLines: string[] = [];
+  const quoteAmount =
+    typeof data.bidAmount === "number" && Number.isFinite(data.bidAmount) && data.bidAmount > 0
+      ? data.projectType === "hourly"
+        ? `$${data.bidAmount.toLocaleString("en-US")}/hour`
+        : `$${data.bidAmount.toLocaleString("en-US")} fixed price`
+      : "Not set — do not mention a price";
+  const quoteDelivery =
+    typeof data.deliveryDays === "number" &&
+    Number.isInteger(data.deliveryDays) &&
+    data.deliveryDays > 0
+      ? `${data.deliveryDays} day${data.deliveryDays === 1 ? "" : "s"}`
+      : "Not set — do not mention a delivery time";
+
+  const contextLines: string[] = [];
   if (data.competition) {
     const parts = [
       `${data.competition.bidCount} bids`,
@@ -409,73 +438,58 @@ export function buildProposalPrompt(data: ProposalPromptData): string {
       data.competition.maxBid !== null ? `highest $${data.competition.maxBid}` : null,
       data.competition.medianBid !== null ? `median $${data.competition.medianBid}` : null,
     ].filter(Boolean);
-    competitionLines.push(`Competition: ${parts.join(", ")}`);
-    if (data.competition.isCheapest) competitionLines.push("You are currently the cheapest bidder.");
+    contextLines.push(`Competition: ${parts.join(", ")}`);
+    if (data.competition.isCheapest) contextLines.push("The user is currently the cheapest bidder.");
   }
-  if (data.bidCount !== undefined) competitionLines.push(`Bid count: ${data.bidCount}`);
-  if (data.projectType) competitionLines.push(`Project type: ${data.projectType}`);
+  if (data.bidCount !== undefined) contextLines.push(`Bid count: ${data.bidCount}`);
+  if (data.avgBid) contextLines.push(`Average bid: ${data.avgBid}`);
+  if (data.projectType) contextLines.push(`Project type: ${data.projectType}`);
   if (data.bidPeriod !== null && data.bidPeriod !== undefined)
-    competitionLines.push(`Bid period: ${data.bidPeriod} days`);
+    contextLines.push(`Client requested delivery: ${data.bidPeriod} days`);
   if (data.upgrades) {
     const flags = [];
     if (data.upgrades.featured) flags.push("Featured");
     if (data.upgrades.urgent) flags.push("Urgent");
     if (data.upgrades.sealed) flags.push("Sealed");
-    if (flags.length > 0) competitionLines.push(`Upgrades: ${flags.join(", ")}`);
+    if (flags.length > 0) contextLines.push(`Upgrades: ${flags.join(", ")}`);
   }
 
-  const contextBlock = competitionLines.length > 0 ? competitionLines.join("\n") : "No additional project context available.";
+  const contextBlock =
+    contextLines.length > 0
+      ? contextLines.join("\n")
+      : "No additional project context available.";
   const analysisBlock = data.analysis
-    ? `AI Analysis (score ${data.analysis.score}/100): ${data.analysis.summary}\nSuggested bid: ${data.analysis.recommendedBidLabel}`
-    : "No prior analysis available. Use the budget range to propose a competitive bid.";
+    ? `Score: ${data.analysis.score}/100\n${data.analysis.summary}`
+    : "No prior analysis available.";
 
   return `
-You are a professional freelancer assistant writing a winning proposal. Use ONLY the verified facts below. Never invent skills, experience, portfolio items, certifications, previous work, or client history.
+${preInstructions ? `=== PROPOSAL WRITING INSTRUCTIONS (PRE-INSTRUCTIONS) ===\n${preInstructions}\n` : ""}
+=== VERIFIED PROFILE FACTS ===
+${profileFacts}
 
-=== USER PROFILE (VERIFIED) ===
-Name: ${p.name || "Not set"}
-Title: ${p.title || "Not set"}
-Hourly rate: ${p.hourlyRate || "Not set"}
-About: ${p.about || "No description provided"}
-Skills: ${skillsText}
-Experience:
-${experienceLines}
-Portfolio:
-${portfolioLines}
-Certifications: ${certsText}
-${p.userSummary ? `Profile summary: ${p.userSummary}` : ""}
-Portfolio summary:
-${portfolioSummaryText}
-
-=== YOUR PROPOSAL INSTRUCTIONS (follow these for tone, content, pricing, and commitments) ===
-${customInstr}
-
-=== PROPOSAL TEMPLATES (reference these for tone and structure) ===
+=== STYLE REFERENCE (templates; match tone and structure, never copy untrue facts) ===
 ${templatesText}
 
 === JOB ===
 Title: ${data.jobTitle}
-Budget: ${data.bidCount !== undefined || data.avgBid ? `Bids: ${data.bidCount ?? "?"}, avg: ${data.avgBid ?? "?"}, range: ${data.highBid ?? "?"}–${data.lowBid ?? "?"}` : "Not specified"}
+Client: ${data.clientName || "Not provided"}
+Budget range: ${data.budgetLabel || "Not specified"}
+Bid amount to quote: ${quoteAmount}
+Delivery to quote: ${quoteDelivery}
 
-=== PROJECT CONTEXT ===
+=== INTERNAL CONTEXT (for positioning only — never mention these numbers to the client) ===
 ${contextBlock}
 
-=== ANALYSIS ===
+=== INTERNAL ANALYSIS (never mention) ===
 ${analysisBlock}
 
 === JOB DESCRIPTION ===
 ${data.jobDescription.join("\n")}
 
-=== INSTRUCTION ===
-Write a proposal cover message that:
-1. Shows the client you read their project description
-2. Highlights 1–2 matching skills from YOUR profile that directly address their needs
-3. References a specific relevant experience or portfolio item from your profile (if any exist)
-4. Follows YOUR PROPOSAL INSTRUCTIONS above — including what you say about pricing, timeline, delivery, and any offers or commitments
-5. Matches the tone and structure of the proposal templates provided (if any)
-6. Stays grounded in the facts above — never invent skills, experience, portfolio items, certifications, previous work, or client history
+=== USER'S PROPOSAL INSTRUCTIONS (APPLIED LAST) ===
+${customInstr}
 
-Return ONLY the proposal text. Do not include headings, code blocks, or meta-commentary. Write it as the freelancer would send it on Freelancer.com.
+Return ONLY the proposal text.
 `.trim();
 }
 
@@ -554,6 +568,8 @@ Validate your output against the profile facts. If the user lacks required skill
 export interface AiCallOptions {
   /** Hard cap on generated output tokens (`max_tokens`). */
   maxTokens?: number;
+  /** Sampling temperature. Defaults to 0.2 for deterministic calls. */
+  temperature?: number;
   /**
    * Provider-enforced JSON-schema response format. Only set this when the
    * selected model supports structured outputs AND the expected reply is an
@@ -590,7 +606,7 @@ export async function callOpenRouter(
   }
 
   const plaintextKey = decrypt(credRow);
-  const model = userPreferredModel ?? readAnalysisModel() ?? DEFAULT_MODEL;
+  const model = userPreferredModel ?? readAnalysisModel() ?? DEFAULT_AI_MODEL;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -603,10 +619,12 @@ export async function callOpenRouter(
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: systemPrompt },
+        ...(systemPrompt.trim().length > 0
+          ? [{ role: "system", content: systemPrompt }]
+          : []),
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.2,
+      temperature: opts?.temperature ?? 0.2,
       ...(opts?.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
       ...(opts?.responseFormat !== undefined
         ? { response_format: opts.responseFormat }
@@ -834,7 +852,7 @@ export function buildRelevancyPrompt(
   timeline?: DeliveryTimelineRequest,
   bidAmount?: BidAmountRequest
 ): string {
-  const userSummary = data.userSummary?.trim() || "No user summary provided.";
+  const profileBrief = data.profileBrief?.trim() || "No profile brief provided.";
   const instructions = data.relevancyInstructions?.trim() || "None.";
 
   const client = data.client;
@@ -894,8 +912,8 @@ Choose the bid amount to quote, in dollars, from exactly these values: ${bidAmou
   return `
 You are a fast, low-cost job screener for a freelance agent. Decide whether the job is worth the freelancer's time AND whether the client is trustworthy enough to auto-bid on. Use ONLY the facts below. Never invent facts about the user or the client.
 
-=== USER SUMMARY ===
-${userSummary}
+=== PROFILE BRIEF ===
+${profileBrief}
 
 === USER RELEVANCY INSTRUCTIONS ===
 ${instructions}
@@ -953,11 +971,18 @@ Respond with ONLY a single valid JSON object and nothing else — no markdown, n
 export async function checkRelevancyWithAI(
   data: RelevancyPromptData,
   timeline?: DeliveryTimelineRequest,
-  bidAmount?: BidAmountRequest
+  bidAmount?: BidAmountRequest,
+  userId?: string
 ): Promise<RelevancyCheck> {
+  const settings = getAiTuningSettings(userId);
   if (readAnalysisEngine() === "jev") {
     try {
-      return await checkRelevancyWithJev(data, timeline, bidAmount);
+      return await checkRelevancyWithJev(
+        data,
+        timeline,
+        bidAmount,
+        settings.relevanceTimeoutSeconds * 1000
+      );
     } catch (error) {
       log.warn(
         `Jev relevance gate failed — job not screened (engine is set to Jev): ${
@@ -975,9 +1000,10 @@ export async function checkRelevancyWithAI(
     systemPrompt,
     buildRelevancyPrompt(data, timeline, bidAmount),
     readAnalysisModel() ?? undefined,
-    undefined,
+    settings.relevanceTimeoutSeconds * 1000,
     {
-      maxTokens: RELEVANCE_MAX_TOKENS,
+      maxTokens: settings.relevanceMaxTokens,
+      temperature: settings.relevanceTemperature,
       responseFormat: buildRelevancyResponseFormat(
         timeline?.options ?? null,
         bidAmount?.options ?? null
@@ -1090,58 +1116,127 @@ export async function generateProposalWithAI(
   preferredModel?: string,
   userId?: string
 ): Promise<{ content: string; competitorNote: string }> {
-  const profile = getProfile(userId ?? "");
-  if (profile === null) {
-    throw new AppError(400, "BAD_REQUEST", "Save your profile before generating a proposal");
-  }
-
-  const promptData: ProposalPromptData = {
-    ...data,
-    profile: {
-      name: profile.name,
-      title: profile.title,
-      hourlyRate: profile.hourlyRate,
-      about: profile.about,
-      skills: profile.skills,
-      experience: profile.experience,
-      portfolio: profile.portfolio,
-      certifications: profile.certifications,
-      wants: profile.wants,
-      notWants: profile.notWants,
-      customInstructions: profile.customInstructions,
-      userSummary: profile.userSummary,
-      portfolioSummary: profile.portfolioSummary,
-      proposalTemplates: profile.proposalTemplates,
-    },
+  const userPrompt = buildProposalPrompt(data);
+  const model = preferredModel ?? readProposalModel() ?? undefined;
+  const settings = getAiTuningSettings(userId);
+  const callOptions = {
+    // No max_tokens cap here: reasoning models can spend the entire cap on
+    // hidden reasoning and return empty content.
+    //
+    // A little variation keeps openings natural while staying factual.
+    temperature: settings.proposalTemperature,
   };
-
-  const userPrompt = buildProposalPrompt(promptData);
-  const systemPrompt =
-    "You are a professional freelancer assistant writing proposals. Use ONLY the verified facts provided. Never invent skills, experience, portfolio items, certifications, previous work, or client history.";
-
-  const rawResponse = await callOpenRouter(
-    systemPrompt,
-    userPrompt,
-    preferredModel ?? readProposalModel() ?? undefined,
-    // Proposals are long-form and can run a big, slow model — give them more
-    // headroom than the fast relevance gate.
-    180_000
-  );
 
   // The proposal is free-form text, not JSON. Strip surrounding code fences
   // if the model wrapped it, and trim.
-  const content = rawResponse
-    .replace(/^```(?:json|text|markdown)?\n/, "")
-    .replace(/\n```\s*$/, "")
-    .trim();
+  const clean = (raw: string) =>
+    raw
+      .replace(/^```(?:json|text|markdown)?\n/, "")
+      .replace(/\n```\s*$/, "")
+      .trim();
 
-  if (content.length < 20) {
+  const inspect = (content: string) =>
+    evaluateProposalQuality(content, {
+      jobTitle: data.jobTitle,
+      jobDescription: data.jobDescription,
+      jobSkills: data.skills,
+      profileSkills: data.profile.skills,
+      bidAmount: data.bidAmount,
+      deliveryDays: data.deliveryDays,
+      allowedUrls: extractUrls(
+        [data.profile.portfolioSummary ?? "", data.profile.about ?? ""].join("\n")
+      ),
+    });
+
+  const criticalIds = new Set([
+    "price",
+    "delivery",
+    "competition",
+    "placeholder",
+    "links",
+  ]);
+  const blockingFailures = (content: string, quality: ReturnType<typeof inspect>) => [
+    ...(content.length < 20 || quality.wordCount < PROPOSAL_MIN_CONTENT_WORDS
+      ? [
+          {
+            label: "Length",
+            detail: `${quality.wordCount} words; expected at least ${PROPOSAL_MIN_CONTENT_WORDS}`,
+          },
+        ]
+      : []),
+    ...quality.checks
+      .filter((check) => !check.passed && criticalIds.has(check.id))
+      .map((check) => ({ label: check.label, detail: check.detail })),
+  ];
+
+  const systemInstructions = data.profile.proposalSystemInstructions?.trim() ?? "";
+
+  const proposalTimeoutMs = settings.proposalTimeoutSeconds * 1000;
+  let content = clean(
+    await callOpenRouter(
+      systemInstructions,
+      userPrompt,
+      model,
+      proposalTimeoutMs,
+      callOptions
+    )
+  );
+  let quality = inspect(content);
+  let failures = blockingFailures(content, quality);
+
+  // Repair a draft that broke a factual or safety check. Style, length,
+  // commercials, and closing preferences are owned by the saved instructions,
+  // so they are never re-imposed here.
+  for (
+    let attempt = 0;
+    failures.length > 0 && attempt < settings.proposalCorrectionAttempts;
+    attempt++
+  ) {
+    log.warn(
+      `Proposal draft failed validation, correction ${
+        attempt + 1
+      }/${settings.proposalCorrectionAttempts}: ${failures
+        .map((failure) => failure.label)
+        .join(", ")}`,
+      { jobTitle: data.jobTitle }
+    );
+    const correctionPrompt = `${userPrompt}
+
+=== CORRECTION NEEDED ===
+The previous draft failed these checks: ${failures
+      .map((failure) => `${failure.label} (${failure.detail})`)
+      .join("; ")}.
+
+=== PREVIOUS DRAFT ===
+${content}
+
+Rewrite the full proposal so those checks pass, using only the verified facts and following the proposal instructions above. Return only the revised proposal text.`;
+    content = clean(
+      await callOpenRouter(
+        systemInstructions,
+        correctionPrompt,
+        model,
+        proposalTimeoutMs,
+        callOptions
+      )
+    );
+    quality = inspect(content);
+    failures = blockingFailures(content, quality);
+  }
+
+  if (failures.length > 0) {
     throw new AppError(
       502,
       "UPSTREAM_ERROR",
-      "AI-generated proposal was too short — try regenerating"
+      `AI-generated proposal failed validation: ${failures
+        .map((failure) => `${failure.label} (${failure.detail})`)
+        .join("; ")}. Try regenerating`
     );
   }
+
+  log.info(
+    `Proposal quality ${quality.score}/100 (${quality.wordCount} words) for job "${data.jobTitle}"`
+  );
 
   // Build a competitor note from the competition data.
   let competitorNote: string;
@@ -1202,31 +1297,26 @@ export async function analyzeJob(
     };
   }
 
-  // Read saved user summary from profile (if userId provided and summary exists)
-  let userSummaryText = "";
-  if (userId) {
-    const profileRow = getDb()
-      .select({ userSummary: userProfile.userSummary })
-      .from(userProfile)
-      .where(eq(userProfile.userId, userId))
-      .get();
-    if (profileRow?.userSummary) {
-      userSummaryText = profileRow.userSummary;
-    }
-  }
+  const profile = userId ? getProfile(userId) : null;
+  const profileBrief = profile === null ? "" : buildProfileBrief(profile);
 
-  const systemPrompt = userSummaryText
-    ? `You are a senior freelancing consultant. Analyze job opportunities using ONLY the user's verified profile facts, the user summary below, and the job description. Never invent skills, experience, portfolio items, certifications, previous work, or client history. If a skill is missing from the profile, state it clearly. Validate your output before responding.\n\n=== USER SUMMARY (verified profile) ===\n${userSummaryText}\n=== END USER SUMMARY ===`
+  const systemPrompt = profileBrief
+    ? `You are a senior freelancing consultant. Analyze job opportunities using ONLY the user's verified profile facts, the profile brief below, and the job description. Never invent skills, experience, portfolio items, certifications, previous work, or client history. If a skill is missing from the profile, state it clearly. Validate your output before responding.\n\n=== PROFILE BRIEF (verified profile) ===\n${profileBrief}\n=== END PROFILE BRIEF ===`
     : `You are a senior freelancing consultant. Analyze job opportunities using ONLY the user's verified profile facts and the job description. Never invent skills, experience, portfolio items, certifications, previous work, or client history. If a skill is missing from the profile, state it clearly. Validate your output before responding.`;
 
   const userPrompt = buildAnalysisPrompt(promptData);
 
+  const settings = getAiTuningSettings(userId);
   const rawResponse = await callOpenRouter(
     systemPrompt,
     userPrompt,
     preferredModel,
-    undefined,
-    { maxTokens: ANALYSIS_MAX_TOKENS, responseFormat: ANALYSIS_RESPONSE_FORMAT }
+    settings.analysisTimeoutSeconds * 1000,
+    {
+      maxTokens: settings.analysisMaxTokens,
+      temperature: settings.analysisTemperature,
+      responseFormat: ANALYSIS_RESPONSE_FORMAT,
+    }
   );
   const result = validateAnalysisOutput(rawResponse);
 

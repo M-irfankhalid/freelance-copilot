@@ -1,0 +1,110 @@
+[
+  {
+    "name": "Elasticsearch network diagnosis",
+    "data": {
+      "jobTitle": "Diagnose Elasticsearch Network Issue",
+      "clientName": "Client in India",
+      "budgetLabel": "$30 - $250",
+      "jobDescription": [
+        "My Elasticsearch cluster has suddenly started returning blank responses. I’ve confirmed the indices and mappings are intact, so I’m convinced the fault lies in the current network configuration, even though nothing has been modified recently on my end.",
+        "I need someone who understands routing, firewalls, and the way Elasticsearch nodes communicate over TCP/HTTP to jump in, trace the packets, and pinpoint the bottleneck. You should be comfortable running curl queries, checking transport and HTTP ports, reviewing DNS or load-balancer rules, and adjusting any mis-configured security groups or firewall rules if we discover them.",
+        "The task ends when queries to the cluster return the expected JSON instead of an empty payload and you can clearly explain the root cause so I can avoid it in the future."
+      ],
+      "skills": [
+        "System Admin",
+        "Linux",
+        "Web Security",
+        "Network Administration",
+        "Elasticsearch",
+        "HTTP",
+        "Network Security",
+        "Firewall"
+      ],
+      "bidCount": 37,
+      "avgBid": "$107",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 120,
+      "deliveryDays": 3,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": {
+        "bidCount": 10,
+        "minBid": 80,
+        "maxBid": 200,
+        "medianBid": 200,
+        "isCheapest": false
+      },
+      "analysis": {
+        "score": 82,
+        "recommendedBidLabel": "$120",
+        "summary": "Strong match on Linux, networking, and Elasticsearch troubleshooting."
+      }
+    }
+  },
+  {
+    "name": "React SaaS MVP",
+    "data": {
+      "jobTitle": "Build a Multi-Tenant SaaS MVP with React and Node",
+      "clientName": "Client in United States",
+      "budgetLabel": "$1,200 - $2,500",
+      "jobDescription": [
+        "We need an MVP for a B2B SaaS product. Users should be able to sign up, create an organization, invite teammates, and manage a simple subscription. The frontend should use React and the backend Node.js with PostgreSQL.",
+        "The MVP must include email/password authentication, role-based access for owners and members, Stripe subscription checkout with a webhook that updates plan status, and an admin view listing organizations and their current plan.",
+        "We have Figma designs for the main screens but no code yet. Please include a short plan for how you would structure the multi-tenant data model, handle Stripe webhooks safely, and deploy the app. We will test with two organizations to confirm data isolation."
+      ],
+      "skills": ["React.js", "Node.js", "PostgreSQL", "Stripe", "API", "Full Stack Development"],
+      "bidCount": 14,
+      "avgBid": "$1,850",
+      "projectType": "fixed",
+      "bidPeriod": 21,
+      "bidAmount": 1800,
+      "deliveryDays": 21,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": {
+        "bidCount": 8,
+        "minBid": 1200,
+        "maxBid": 2500,
+        "medianBid": 1900,
+        "isCheapest": false
+      },
+      "analysis": {
+        "score": 88,
+        "recommendedBidLabel": "$1,800",
+        "summary": "Strong full-stack fit with React, Node, PostgreSQL, and API integration experience."
+      }
+    }
+  },
+  {
+    "name": "Node.js API performance fix",
+    "data": {
+      "jobTitle": "Fix Slow Node.js API Endpoints and Add Caching",
+      "clientName": "Client in Canada",
+      "budgetLabel": "$25 - $50",
+      "jobDescription": [
+        "Our Express API has become slow under load. The main /orders and /inventory endpoints sometimes take 4–6 seconds, and Redis is already installed but not used by the application.",
+        "We need you to profile the slow routes, find the N+1 database queries, add Redis caching with sensible invalidation, and reduce response time below 500ms for the common cases. You should be comfortable with Node.js, Express, PostgreSQL, Redis, and load testing.",
+        "Please explain how you would measure before/after performance and how you would avoid stale cache data when an order or inventory item changes."
+      ],
+      "skills": ["Node.js", "Express.js", "PostgreSQL", "Redis", "API", "Performance"],
+      "bidCount": 9,
+      "avgBid": "$42/hr",
+      "projectType": "hourly",
+      "bidPeriod": 7,
+      "bidAmount": 40,
+      "deliveryDays": 7,
+      "upgrades": { "featured": false, "urgent": false, "sealed": true },
+      "competition": {
+        "bidCount": 5,
+        "minBid": 30,
+        "maxBid": 50,
+        "medianBid": 42,
+        "isCheapest": false
+      },
+      "analysis": {
+        "score": 84,
+        "recommendedBidLabel": "$40/hr",
+        "summary": "Good match on Node.js, PostgreSQL, Redis, and API performance work."
+      }
+    }
+  }
+]

@@ -11,15 +11,19 @@ import {
   userBids,
 } from "../../db/schema.js";
 import { getProfile } from "../profile/profile.service.js";
+import { buildProfileBrief } from "../profile/profile-brief.js";
 import { checkRelevancyWithAI } from "../ai/ai.service.js";
 import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
 import {
+  getBidAmountBounds,
   getBidAmountSettings,
   getDeliveryTimelineSettings,
   resolveBidAmountOptions,
   resolveDefaultBidAmount,
-  roundUpToStep,
+  roundFixedBidAmount,
   extractClientMentionedBudget,
+  type BidAmountBounds,
+  type BidAmountSettings,
 } from "../../lib/delivery-timeline.js";
 import {
   type FreelancerProject,
@@ -46,15 +50,9 @@ import {
   isBadReputationClient,
 } from "./client-quality.js";
 import { getPreanalysisGates } from "./preanalysis-gates.js";
+import { getAiTuningSettings, matchBandForScore } from "../ai/ai-settings.service.js";
 
 const log = createLogger("sync");
-
-/**
- * Model A scores below this floor are marked ignored — not worth surfacing or
- * bidding on at all. Scores 60+ but below the user's auto-bid threshold are
- * surfaced for manual review when the client carries a trust concern.
- */
-const RELEVANCE_IGNORE_FLOOR = 50;
 
 /** Scores at/above this but below the auto-bid threshold are "needs review" candidates. */
 export const MANUAL_REVIEW_FLOOR = 60;
@@ -168,32 +166,33 @@ export function parseStoredAnalysis(raw: string | null): StoredAnalysis | null {
  * available) for deduplication.
  */
 function storeBids(projectId: number, bids: FreelancerBid[], fetchedAt: string): void {
-  getDb()
-    .delete(bidsTable)
-    .where(eq(bidsTable.projectId, projectId))
-    .run();
-
-  for (let i = 0; i < bids.length; i++) {
-    const bid = bids[i];
-    if (bid === undefined) continue;
-    const bidder = bid.bidder;
-    const bidId = `bid-${projectId}-${i}`;
-    getDb()
-      .insert(bidsTable)
-      .values({
-        id: bidId,
-        projectId,
-        bidderId: bidder?.id ?? null,
-        bidderName: bidder?.name ?? bidder?.username ?? null,
-        amount: bid.amount ?? null,
-        currencyCode: bid.currency?.code ?? null,
-        isCheapest: bid.is_cheapest ? 1 : 0,
-        timeSubmitted: bid.time_submitted ?? null,
-        description: bid.description ?? null,
-        fetchedAt,
-      })
+  const db = getDb();
+  db.transaction((tx) => {
+    tx.delete(bidsTable)
+      .where(eq(bidsTable.projectId, projectId))
       .run();
-  }
+
+    for (let i = 0; i < bids.length; i++) {
+      const bid = bids[i];
+      if (bid === undefined) continue;
+      const bidder = bid.bidder;
+      const bidId = `bid-${projectId}-${i}`;
+      tx.insert(bidsTable)
+        .values({
+          id: bidId,
+          projectId,
+          bidderId: bidder?.id ?? null,
+          bidderName: bidder?.name ?? bidder?.username ?? null,
+          amount: bid.amount ?? null,
+          currencyCode: bid.currency?.code ?? null,
+          isCheapest: bid.is_cheapest ? 1 : 0,
+          timeSubmitted: bid.time_submitted ?? null,
+          description: bid.description ?? null,
+          fetchedAt,
+        })
+        .run();
+    }
+  });
   log.info(`Stored ${bids.length} bids for project ${projectId}`);
 }
 
@@ -328,6 +327,7 @@ export function listStoredJobs(
 export interface MatchItem {
   id: string;
   jobId: string;
+  projectId: number;
   title: string;
   client: string;
   budgetLabel: string;
@@ -357,6 +357,7 @@ export interface MatchItem {
  */
 export function listMatches(userId: string): MatchItem[] {
   const profile = getProfile(userId);
+  const aiSettings = getAiTuningSettings(userId);
   const profileSkills = (profile?.skills ?? []).map((s) => s.trim().toLowerCase());
 
   const rows = getDb()
@@ -428,12 +429,13 @@ export function listMatches(userId: string): MatchItem[] {
     return {
       id: `match-${row.projectId}`,
       jobId: String(row.projectId),
+      projectId: row.projectId,
       title: row.title,
       client: row.client,
       budgetLabel: row.budgetLabel,
       postedLabel: row.postedLabel,
       score,
-      band: score >= 90 ? "strong" : score >= 75 ? "good" : "fair",
+      band: matchBandForScore(score, aiSettings),
       matchedSkills,
       missingSkills,
       concerns: stored?.concerns ?? [],
@@ -615,43 +617,50 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
 
 /**
  * The bid amount to pre-fill on the manual bid page. The relevance gate's pick
- * wins when AI bid-amount selection was on at analysis time; otherwise the
+ * wins only when AI bid-amount selection is currently on; otherwise the
  * default-markup rule (minimum + user's markup% of the project max) is used.
  * Null when neither is computable (e.g. the project has no usable budget).
+ *
+ * The suggestion goes through the same fixed-price rounding and minimum-budget
+ * guard as auto-bid, then is clamped to the user's configured bounds so the
+ * form never starts from an amount auto-bid could not submit.
  */
 function computeSuggestedBidAmount(
   storedBidAmount: number | null | undefined,
   project: FreelancerProject,
-  userId?: string
+  settings: BidAmountSettings,
+  bounds: BidAmountBounds
 ): number | null {
-  if (typeof storedBidAmount === "number" && storedBidAmount > 0) {
-    const rounded = Math.round(storedBidAmount);
-    // Only round fixed-price projects; hourly projects use exact amounts.
-    if (project.type === "fixed") {
-      const bidAmountSettings = getBidAmountSettings(userId ?? "");
-      return roundUpToStep(rounded, bidAmountSettings.roundBidUpTo);
-    }
-    return rounded;
-  }
-
-  // No AI pick — fall back to the default markup formula when budget info is
-  // present. The user's markup setting comes from their automation defaults.
   const minimum = project.budget?.minimum;
-  if (typeof minimum !== "number" || minimum <= 0 || !Number.isFinite(minimum)) {
+  const usableMinimum =
+    typeof minimum === "number" && minimum > 0 && Number.isFinite(minimum)
+      ? minimum
+      : 0;
+
+  let amount: number;
+  if (
+    settings.aiBidAmount &&
+    typeof storedBidAmount === "number" &&
+    storedBidAmount > 0
+  ) {
+    amount = Math.round(storedBidAmount);
+  } else if (usableMinimum > 0) {
+    amount = resolveDefaultBidAmount(
+      usableMinimum,
+      project.budget?.maximum,
+      settings.defaultBidMarkupPct
+    );
+  } else {
     return null;
   }
 
-  const bidAmountSettings = getBidAmountSettings(userId ?? "");
-  const base = resolveDefaultBidAmount(
-    minimum,
-    project.budget?.maximum,
-    bidAmountSettings.defaultBidMarkupPct
-  );
-  // Only round fixed-price projects.
-  if (project.type === "fixed") {
-    return roundUpToStep(base, bidAmountSettings.roundBidUpTo);
-  }
-  return Math.round(base);
+  // Only round fixed-price projects; hourly projects use exact amounts.
+  const rounded =
+    project.type === "fixed"
+      ? roundFixedBidAmount(amount, settings.roundBidUpTo, usableMinimum)
+      : Math.round(amount);
+
+  return Math.max(bounds.minBid, Math.min(bounds.maxBid, rounded));
 }
 
 export async function getJobById(
@@ -735,6 +744,17 @@ export async function getJobById(
   }
 
   const storedAnalysis = parseStoredAnalysis(refreshed.analysis);
+  if (storedAnalysis !== null && userId !== undefined) {
+    storedAnalysis.verdict = matchBandForScore(
+      storedAnalysis.score,
+      getAiTuningSettings(userId)
+    );
+  }
+  // Only surface AI picks while the matching feature is still enabled, so the
+  // job page never starts from a stale pick the user has switched off.
+  const bidAmountSettings = getBidAmountSettings(userId ?? "");
+  const timelineSettings = getDeliveryTimelineSettings(userId ?? "");
+  const bidAmountBounds = getBidAmountBounds(userId ?? "");
   return client.mapToJobDetail(
     project,
     postedLabel,
@@ -745,12 +765,15 @@ export async function getJobById(
     {
       rejectionReason: refreshed.rejectionReason ?? null,
       bidError: refreshed.autoBidError ?? null,
-      deliveryDays: refreshed.deliveryDays ?? null,
-      bidAmount: refreshed.bidAmount ?? null,
+      deliveryDays: timelineSettings.aiDeliveryTimeline
+        ? refreshed.deliveryDays ?? null
+        : null,
+      bidAmount: bidAmountSettings.aiBidAmount ? refreshed.bidAmount ?? null : null,
       suggestedBidAmount: computeSuggestedBidAmount(
         refreshed.bidAmount,
         project,
-        userId
+        bidAmountSettings,
+        bidAmountBounds
       ),
       myBid: userId !== undefined ? findMyBid(userId, projectId) : null,
     }
@@ -855,6 +878,8 @@ export async function analyzeJob(
       "Save your profile before running an analysis"
     );
   }
+
+  const aiSettings = getAiTuningSettings(userId);
 
   // Pre-analysis rejection toggles from Automation (country gate + bad-client gate).
   const gates = getPreanalysisGates(userId);
@@ -1040,7 +1065,7 @@ export async function analyzeJob(
     {
       jobTitle: project.title ?? "(untitled project)",
       jobDescription,
-      userSummary: profile.userSummary,
+      profileBrief: buildProfileBrief(profile),
       relevancyInstructions: profile.relevancyInstructions,
       client: {
         country: clientQuality.country,
@@ -1058,14 +1083,15 @@ export async function analyzeJob(
       bidPeriod: project.bidperiod ?? null,
     },
     timeline,
-    bidAmount
+    bidAmount,
+    userId
   );
 
   const trustConcerns = clientTrustConcerns(clientQuality, project.type);
 
-  if (check.score < RELEVANCE_IGNORE_FLOOR) {
+  if (check.score < aiSettings.relevanceIgnoreFloor) {
     log.info(
-      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — relevance score ${check.score}/100 is below the ${RELEVANCE_IGNORE_FLOOR} floor: ${check.reason}`
+      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — relevance score ${check.score}/100 is below the ${aiSettings.relevanceIgnoreFloor} floor: ${check.reason}`
     );
     return storeIgnored(
       check.score,
@@ -1078,7 +1104,7 @@ export async function analyzeJob(
   const matchedSkills = jobSkills.filter((s) => profile.skills.includes(s));
   const missingSkills = profile.skills.filter((s) => !jobSkills.includes(s));
   const storedAnalysis: StoredAnalysis = {
-    verdict: check.score >= 80 ? "strong" : check.score >= 60 ? "good" : "fair",
+    verdict: matchBandForScore(check.score, aiSettings),
     score: check.score,
     summary: check.reason,
     reasons: [check.reason],

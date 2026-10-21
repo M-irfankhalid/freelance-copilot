@@ -368,8 +368,8 @@ export interface JobDetailData {
    */
   deliveryDays?: number | null;
   /**
-   * Bid amount (dollars) the relevance gate picked for this project, when AI
-   * bid-amount selection was on at analysis time. Null otherwise.
+   * Bid amount (dollars) the relevance gate picked for this project, only while
+   * AI bid-amount selection is enabled. Null otherwise.
    */
   bidAmount?: number | null;
   /**
@@ -637,9 +637,15 @@ export class FreelancerApiClient {
       .map((b) => (typeof b.amount === "number" ? b.amount : null))
       .filter((n): n is number => n !== null && n > 0);
     const sorted = [...amounts].sort((a, b) => a - b);
-    const [minBid, , , maxBid] = sorted;
+    const minBid = sorted[0];
+    const maxBid = sorted[sorted.length - 1];
     const midIdx = Math.floor(sorted.length / 2);
-    const medianBid = sorted[midIdx];
+    const medianBid =
+      sorted.length === 0
+        ? undefined
+        : sorted.length % 2 === 1
+          ? sorted[midIdx]
+          : ((sorted[midIdx - 1] ?? 0) + (sorted[midIdx] ?? 0)) / 2;
     return {
       bidCount: bids.length,
       minBid: minBid ?? null,
@@ -721,13 +727,13 @@ export class FreelancerApiClient {
       deliveryDays?: number | null;
       /** Bid amount (dollars) the gate picked for this project, if any. */
       bidAmount?: number | null;
-      /**
-       * Suggested bid amount shown on the manual bid page. When AI bid-amount
-       * selection was on at analysis time this is the gate's pick; when off it is
-       * the default-markup amount (minimum + markup% of max). Null when neither is
-       * computable (e.g. no usable budget).
-       */
-      suggestedBidAmount?: number | null;
+  /**
+   * Suggested bid amount shown on the manual bid page. When AI bid-amount
+   * selection is enabled this is the gate's pick (if it made one); otherwise it
+   * is the default-markup amount (minimum + markup% of max). Rounded and
+   * clamped to the user's bounds. Null when neither is computable.
+   */
+  suggestedBidAmount?: number | null;
     } = {
       rejectionReason: null,
       bidError: null,

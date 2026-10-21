@@ -5,6 +5,10 @@ import { getDb } from "../../db/index.js";
 import { platformCredentials, userProfile } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { decrypt } from "../../lib/crypto.js";
+import {
+  DEFAULT_PROPOSAL_SYSTEM_INSTRUCTIONS,
+  DEFAULT_PROPOSAL_WRITING_INSTRUCTIONS,
+} from "../../lib/proposal-instructions.js";
 import { createLogger } from "../../lib/logger.js";
 
 /**
@@ -24,26 +28,6 @@ export const profileSchema = z.object({
   skills: z.array(z.string().min(1).max(60)).max(50),
   /** Numeric Freelancer.com skill/category ids paired 1:1 with `skills`. */
   skillIds: z.array(z.number().int().positive()).max(50),
-  experience: z
-    .array(
-      z.object({
-        role: z.string().min(1).max(120),
-        company: z.string().min(1).max(120),
-        periodLabel: z.string().min(1).max(60),
-        summary: z.string().max(2_000).nullable(),
-      })
-    )
-    .max(20),
-  portfolio: z
-    .array(
-      z.object({
-        title: z.string().min(1).max(160),
-        url: z.string().max(500).nullable(),
-        description: z.string().max(1_000).nullable(),
-      })
-    )
-    .max(30),
-  certifications: z.array(z.string().min(1).max(160)).max(20),
   preferredProjectTypes: z.array(z.string().min(1).max(80)).max(20),
   wants: z.array(z.string().min(1).max(60)).max(30),
   notWants: z.array(z.string().min(1).max(60)).max(30),
@@ -57,6 +41,10 @@ export const profileSchema = z.object({
   portfolioSummary: z.string().max(40_000).nullable().optional(),
   /** Markdown block holding all proposal templates, used during proposal generation. */
   proposalTemplates: z.string().max(40_000).nullable().optional(),
+  /** Editable system prompt for the proposal writer. */
+  proposalSystemInstructions: z.string().max(20_000).nullable().optional(),
+  /** Editable pre-instructions placed before profile facts in the proposal prompt. */
+  proposalWritingInstructions: z.string().max(20_000).nullable().optional(),
 });
 
 export type ProfileData = z.infer<typeof profileSchema>;
@@ -69,9 +57,6 @@ interface ProfileRow {
   about: string | null;
   skills: string | null;
   skillIds: string | null;
-  experience: string | null;
-  portfolio: string | null;
-  certifications: string | null;
   preferredProjectTypes: string | null;
   wants: string | null;
   notWants: string | null;
@@ -82,6 +67,8 @@ interface ProfileRow {
   relevancyInstructions: string | null;
   portfolioSummary: string | null;
   proposalTemplates: string | null;
+  proposalSystemInstructions: string | null;
+  proposalWritingInstructions: string | null;
 }
 
 function parseJsonArray(raw: string | null): unknown[] {
@@ -115,9 +102,6 @@ export function getProfile(userId: string): ProfileData | null {
     skillIds: parseJsonArray(r.skillIds).filter(
       (v): v is number => typeof v === "number" && Number.isInteger(v) && v > 0
     ),
-    experience: parseJsonArray(r.experience),
-    portfolio: parseJsonArray(r.portfolio),
-    certifications: parseJsonArray(r.certifications),
     preferredProjectTypes: parseJsonArray(r.preferredProjectTypes),
     wants: parseJsonArray(r.wants),
     notWants: parseJsonArray(r.notWants),
@@ -127,6 +111,10 @@ export function getProfile(userId: string): ProfileData | null {
     relevancyInstructions: r.relevancyInstructions,
     portfolioSummary: r.portfolioSummary,
     proposalTemplates: r.proposalTemplates,
+    proposalSystemInstructions:
+      r.proposalSystemInstructions ?? DEFAULT_PROPOSAL_SYSTEM_INSTRUCTIONS,
+    proposalWritingInstructions:
+      r.proposalWritingInstructions ?? DEFAULT_PROPOSAL_WRITING_INSTRUCTIONS,
   });
   return parsed.success ? parsed.data : null;
 }
@@ -142,9 +130,6 @@ export function saveProfile(userId: string, data: ProfileData): void {
     about: data.about,
     skills: JSON.stringify(data.skills),
     skillIds: JSON.stringify(data.skillIds),
-    experience: JSON.stringify(data.experience),
-    portfolio: JSON.stringify(data.portfolio),
-    certifications: JSON.stringify(data.certifications),
     preferredProjectTypes: JSON.stringify(data.preferredProjectTypes),
     wants: JSON.stringify(data.wants),
     notWants: JSON.stringify(data.notWants),
@@ -154,6 +139,8 @@ export function saveProfile(userId: string, data: ProfileData): void {
     relevancyInstructions: data.relevancyInstructions ?? null,
     portfolioSummary: data.portfolioSummary ?? null,
     proposalTemplates: data.proposalTemplates ?? null,
+    proposalSystemInstructions: data.proposalSystemInstructions ?? null,
+    proposalWritingInstructions: data.proposalWritingInstructions ?? null,
     updatedAt: now,
   };
   const existing = getDb()
@@ -175,25 +162,13 @@ export function saveProfile(userId: string, data: ProfileData): void {
   }
 }
 
-interface FreelancerPortfolio {
-  id: number;
-  title: string;
-  description: string | null;
-  files: Array<{
-    cdn_url: string | null;
-    thumbnails?: Array<{ cdn_url: string | null }>;
-  }>;
-}
-
 /**
  * Fetch the owner's own public data from Freelancer.com using their stored
  * token and map it onto our profile shape. Returns a draft — nothing is
  * saved until the user reviews and saves it.
  *
- * Two API calls are made:
- *  1. Self endpoint with profile_description=true and jobs=true to get the
- *     profile text, skills (jobs array), and the user's Freelancer ID.
- *  2. Portfolios endpoint using the user ID to fetch portfolio projects.
+ * A single self endpoint call is made with profile_description=true and
+ * jobs=true to get the profile text and skills (jobs array).
  */
 export async function importFromFreelancer(): Promise<ProfileData> {
   const credRow = getDb()
@@ -218,7 +193,7 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   let selfResponse: Response;
   try {
     selfResponse = await fetch(
-      "https://www.freelancer.com/api/users/0.1/self/?compact=false&avatar=true&country_details=true&profile_description=true&display_info=true&jobs=true&membership_details=true&location_details=true&portfolio_details=true&preferred_details=true&cover_image=true&past_cover_images=true&mobile_tracking=true&user_recommendations=true&sanction_details=true&rising_star=true&shareholder_details=true",
+      "https://www.freelancer.com/api/users/0.1/self/?compact=false&avatar=true&country_details=true&profile_description=true&display_info=true&jobs=true&membership_details=true&location_details=true&preferred_details=true&cover_image=true&past_cover_images=true&mobile_tracking=true&user_recommendations=true&sanction_details=true&rising_star=true&shareholder_details=true",
       { headers: authHeaders, signal: controller.signal }
     );
   } catch {
@@ -245,60 +220,6 @@ export async function importFromFreelancer(): Promise<ProfileData> {
   const r = selfBody.result;
   const asString = (value: unknown): string | null =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-
-  // Extract user ID for the portfolios API call.
-  const userId = typeof r.id === "number" ? r.id : Number(r.id);
-
-  // Step 2: Fetch portfolios using the user ID.
-  let portfolio: ProfileData["portfolio"] = [];
-  if (!Number.isNaN(userId) && userId > 0) {
-    const pt = setTimeout(() => controller.abort(), 10_000);
-    let portfoliosResponse: Response | null = null;
-    try {
-      portfoliosResponse = await fetch(
-        `https://www.freelancer.com/api/users/0.1/portfolios/?users[]=${userId}&compact=false`,
-        { headers: authHeaders }
-      );
-    } catch {
-      // Portfolio fetch failure is non-fatal — import still returns basics.
-      clearTimeout(pt);
-      portfolio = [];
-    } finally {
-      clearTimeout(pt);
-    }
-
-    if (portfoliosResponse?.ok) {
-      const pBody = (await portfoliosResponse.json()) as {
-        status?: string;
-        result?: {
-          portfolios?: Record<string, FreelancerPortfolio[]>;
-        };
-      };
-      if (pBody.status === "success" && pBody.result?.portfolios) {
-        const items = pBody.result.portfolios[String(userId)] ?? [];
-        portfolio = items
-          .filter(
-            (p): p is FreelancerPortfolio =>
-              p !== null &&
-              typeof p === "object" &&
-              typeof p.title === "string" &&
-              p.title.trim().length > 0
-          )
-          .map((p) => {
-            const url =
-              p.files?.[0]?.cdn_url ??
-              p.files?.[0]?.thumbnails?.[0]?.cdn_url ??
-              null;
-            return {
-              title: p.title.trim(),
-              url: url ? `https:${url}` : null,
-              description: asString(p.description),
-            };
-          })
-          .slice(0, 30);
-      }
-    }
-  }
 
   // Build skills and skill IDs from the real API. The self endpoint returns
   // jobs[] as { id, name, category, ... } — we store the names for display
@@ -334,9 +255,6 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     about: asString(r.profile_description),
     skills: skillsData,
     skillIds: skillIdsData,
-    experience: [],
-    portfolio,
-    certifications: [],
     preferredProjectTypes: [],
     wants: [],
     notWants: [],
@@ -346,11 +264,13 @@ export async function importFromFreelancer(): Promise<ProfileData> {
     relevancyInstructions: null,
     portfolioSummary: null,
     proposalTemplates: null,
+    proposalSystemInstructions: null,
+    proposalWritingInstructions: null,
   });
 
   log.info(
     `Imported Freelancer profile for @${draft.freelancerUsername ?? "unknown"}`,
-    { portfolioCount: portfolio.length, skillCount: draft.skills.length }
+    { skillCount: draft.skills.length }
   );
   return draft;
 }

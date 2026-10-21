@@ -1,5 +1,6 @@
-import { Bot, ExternalLink, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { ExternalLink, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 
+import { BrandLogo } from "@/components/shared/brand-logo";
 import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -44,7 +45,7 @@ export default function AboutPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Bot className="size-5" aria-hidden />
+              <BrandLogo className="size-7" title="Freelance Copilot" />
             </span>
             <div className="flex flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">

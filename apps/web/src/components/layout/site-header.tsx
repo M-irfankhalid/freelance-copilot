@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { NotificationsMenu } from "@/components/layout/notifications-menu";
 import { UserMenu } from "@/components/layout/user-menu";
 import { allNavItems, type NavItem } from "@/lib/navigation";
 
@@ -75,8 +74,6 @@ export function SiteHeader() {
         </Breadcrumb>
       </div>
       <div className="flex items-center gap-1 pr-3 md:pr-4">
-        <NotificationsMenu />
-        <Separator orientation="vertical" className="mx-1 h-4" />
         <UserMenu variant="header" />
       </div>
     </header>

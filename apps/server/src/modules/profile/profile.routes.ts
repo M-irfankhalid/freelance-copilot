@@ -1,6 +1,11 @@
 import { Router } from "express";
 
+import {
+  DEFAULT_PROPOSAL_SYSTEM_INSTRUCTIONS,
+  DEFAULT_PROPOSAL_WRITING_INSTRUCTIONS,
+} from "../../lib/proposal-instructions.js";
 import { parseBody } from "../../lib/validate.js";
+import { buildProfileBrief } from "./profile-brief.js";
 import {
   getProfile,
   importFromFreelancer,
@@ -12,7 +17,15 @@ export const profileRouter = Router();
 
 /** The owner's profile, or null before it is first saved. */
 profileRouter.get("/", (req, res) => {
-  res.json({ profile: getProfile(req.user!.id) });
+  const profile = getProfile(req.user!.id);
+  res.json({
+    profile,
+    aiBrief: profile === null ? null : buildProfileBrief(profile),
+    writerDefaults: {
+      proposalSystemInstructions: DEFAULT_PROPOSAL_SYSTEM_INSTRUCTIONS,
+      proposalWritingInstructions: DEFAULT_PROPOSAL_WRITING_INSTRUCTIONS,
+    },
+  });
 });
 
 /** Replace the whole profile. Validated strictly — this grounds all AI output. */

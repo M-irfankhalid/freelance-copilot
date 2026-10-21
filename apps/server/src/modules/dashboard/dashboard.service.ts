@@ -15,6 +15,7 @@ import { getBidAmountSettings } from "../../lib/delivery-timeline.js";
 import { getProfile } from "../profile/profile.service.js";
 import { parseStoredAnalysis } from "../jobs/jobs.service.js";
 import { getDiscordSettings } from "../discord/discord.service.js";
+import { getAiTuningSettings } from "../ai/ai-settings.service.js";
 
 const log = createLogger("system");
 
@@ -123,7 +124,7 @@ export interface BidAmountSettingsSummary {
   /** Non-empty guidance text. */
   bidAmountInstructions: string;
   bidAmountMarkupInstructions: string;
-  /** Round bid up to nearest N dollars (0 = no rounding). */
+  /** Round bid to the nearest N dollars (0 = no rounding). */
   roundBidUpTo: number;
 }
 
@@ -221,6 +222,7 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
     const now = Date.now();
     const iso7d = isoBefore(7);
     const iso14d = isoBefore(14);
+    const aiSettings = getAiTuningSettings(userId);
 
     // --- KPIs ---
     const jobs7d = countWhere(
@@ -238,11 +240,11 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
 
     const strong7d = countWhere(
       db,
-      sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= 90 AND ${jobsTable.lastAnalyzedAt} >= ${iso7d}`
+      sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= ${aiSettings.strongScoreFloor} AND ${jobsTable.lastAnalyzedAt} >= ${iso7d}`
     );
     const strongPrev7d = countWhere(
       db,
-      sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= 90 AND ${jobsTable.lastAnalyzedAt} >= ${iso14d} AND ${jobsTable.lastAnalyzedAt} < ${iso7d}`
+      sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= ${aiSettings.strongScoreFloor} AND ${jobsTable.lastAnalyzedAt} >= ${iso14d} AND ${jobsTable.lastAnalyzedAt} < ${iso7d}`
     );
 
     const pendingStatuses = ["awaiting_approval", "queued", "draft"];
@@ -319,7 +321,7 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
         id: "strong-matches",
         label: "Strong matches",
         value: String(strong7d),
-        context: "Score 90+ · last 7 days",
+        context: `Score ${aiSettings.strongScoreFloor}+ · last 7 days`,
         delta: buildDelta(strong7d, strongPrev7d, "vs previous week"),
       },
       {
@@ -360,7 +362,9 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       jobsAnalyzed > 0
         ? Math.round(scores.reduce((sum, s) => sum + s, 0) / jobsAnalyzed)
         : 0;
-    const strongMatches = scores.filter((s) => s >= 90).length;
+    const strongMatches = scores.filter(
+      (s) => s >= aiSettings.strongScoreFloor
+    ).length;
     const bandCount = (band: (s: number) => boolean): number =>
       scores.filter(band).length;
     const matchQuality: MatchQualitySnapshot = {
@@ -369,18 +373,36 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       jobsAnalyzed,
       strongMatches,
       bands: [
-        { band: "strong", label: "Strong", rangeLabel: "90–100", count: bandCount((s) => s >= 90) },
-        { band: "good", label: "Good", rangeLabel: "75–89", count: bandCount((s) => s >= 75 && s < 90) },
-        { band: "fair", label: "Fair", rangeLabel: "Below 75", count: bandCount((s) => s < 75) },
+        {
+          band: "strong",
+          label: "Strong",
+          rangeLabel: `${aiSettings.strongScoreFloor}–100`,
+          count: bandCount((s) => s >= aiSettings.strongScoreFloor),
+        },
+        {
+          band: "good",
+          label: "Good",
+          rangeLabel: `${aiSettings.goodScoreFloor}–${aiSettings.strongScoreFloor - 1}`,
+          count: bandCount(
+            (s) =>
+              s >= aiSettings.goodScoreFloor && s < aiSettings.strongScoreFloor
+          ),
+        },
+        {
+          band: "fair",
+          label: "Fair",
+          rangeLabel: `Below ${aiSettings.goodScoreFloor}`,
+          count: bandCount((s) => s < aiSettings.goodScoreFloor),
+        },
       ],
     };
 
-    // --- Jobs requiring attention (analyzed, score >= 80, top 5) ---
+    // --- Jobs requiring attention (analyzed, score >= good band, top 5) ---
     const attentionRows = db
       .select()
       .from(jobsTable)
       .where(
-        sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= 80`
+        sql`${jobsTable.status} = 'analyzed' AND ${jobsTable.matchScore} >= ${aiSettings.goodScoreFloor}`
       )
       .orderBy(desc(jobsTable.matchScore))
       .limit(5)
@@ -400,7 +422,12 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
         matchScore: score,
         budgetLabel: row.budgetLabel,
         reason,
-        severity: score >= 90 ? "urgent" : score >= 80 ? "warning" : "info",
+        severity:
+          score >= aiSettings.strongScoreFloor
+            ? "urgent"
+            : score >= aiSettings.goodScoreFloor
+              ? "warning"
+              : "info",
       };
     });
 
@@ -546,18 +573,22 @@ export async function getDashboard(userId: string): Promise<DashboardSnapshot> {
       timeLabel: relativeFromIso(row.time),
     }));
 
-    // Bid-amount settings summary — pure read (defaults when the row is absent).
+    // Bid-amount settings summary. No automation row means no configured bounds
+    // yet, so the card is hidden rather than showing a misleading $0–$0 range.
     const bidAmountSettings = getBidAmountSettings(userId);
-    const bidAmount: BidAmountSettingsSummary | null = {
-      aiBidAmount: bidAmountSettings.aiBidAmount,
-      bidAmountFractions: bidAmountSettings.bidAmountFractions,
-      defaultBidMarkupPct: bidAmountSettings.defaultBidMarkupPct,
-      minBid: autoRow?.minBid ?? 0,
-      maxBid: autoRow?.maxBid ?? 0,
-      bidAmountInstructions: bidAmountSettings.bidAmountInstructions,
-      bidAmountMarkupInstructions: bidAmountSettings.bidAmountMarkupInstructions,
-      roundBidUpTo: bidAmountSettings.roundBidUpTo,
-    };
+    const bidAmount: BidAmountSettingsSummary | null =
+      autoRow === undefined
+        ? null
+        : {
+            aiBidAmount: bidAmountSettings.aiBidAmount,
+            bidAmountFractions: bidAmountSettings.bidAmountFractions,
+            defaultBidMarkupPct: bidAmountSettings.defaultBidMarkupPct,
+            minBid: autoRow.minBid,
+            maxBid: autoRow.maxBid,
+            bidAmountInstructions: bidAmountSettings.bidAmountInstructions,
+            bidAmountMarkupInstructions: bidAmountSettings.bidAmountMarkupInstructions,
+            roundBidUpTo: bidAmountSettings.roundBidUpTo,
+          };
 
     return {
       kpis,

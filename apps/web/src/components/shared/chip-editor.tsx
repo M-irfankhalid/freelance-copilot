@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 /**
- * Tag-style list editor used for skills, wants, not-wants, certifications,
+ * Tag-style list editor used for skills, wants, not-wants,
  * and preferred project types — all of which are simple string arrays.
  * Controlled; duplicates are ignored.
  */

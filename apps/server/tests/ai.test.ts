@@ -197,14 +197,12 @@ beforeAll(async () => {
       about: "React + Node dashboards.",
       skills: ["React.js", "Node.js"],
       skillIds: [759, 500],
-      experience: [],
-      portfolio: [],
-      certifications: [],
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
       ignoredCountries: [],
       customInstructions: null,
+      userSummary: "STALE-SUMMARY-MUST-NOT-BE-USED",
     }),
   });
   if (profileRes.status !== 200) {
@@ -514,6 +512,10 @@ describe("analyzeJob integration", () => {
     });
     expect(r.status).toBe(200);
     expect(requestBody).not.toBeNull();
+    const requestText = JSON.stringify(requestBody);
+    expect(requestText).toContain("PROFILE BRIEF");
+    expect(requestText).toContain("React.js");
+    expect(requestText).not.toContain("STALE-SUMMARY-MUST-NOT-BE-USED");
     // The gate request carries a strict JSON-schema response_format so the
     // model's reply is provider-enforced to the {score, reason} shape.
     const rf = requestBody?.["response_format"] as
@@ -540,9 +542,6 @@ describe("analyzeJob integration", () => {
         about: "React + Node dashboards.",
         skills: ["React.js", "Node.js"],
         skillIds: [759, 500],
-        experience: [],
-        portfolio: [],
-        certifications: [],
         preferredProjectTypes: ["Fixed price"],
         wants: ["React"],
         notWants: ["crypto"],
@@ -622,9 +621,6 @@ describe("analyzeJob integration", () => {
           about: "React + Node dashboards.",
           skills: ["React.js", "Node.js"],
           skillIds: [759, 500],
-          experience: [],
-          portfolio: [],
-          certifications: [],
           preferredProjectTypes: ["Fixed price"],
           wants: ["React"],
           notWants: ["crypto"],

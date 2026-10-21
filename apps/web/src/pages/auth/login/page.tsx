@@ -65,7 +65,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await postJson("/api/auth/login", { email, password });
-      refresh();
+      await refresh();
       navigate(intended, { replace: true });
     } catch (cause) {
       setError(

@@ -158,7 +158,7 @@ function parseFractionsList(text: string): string[] | null {
 }
 
 /**
- * A valid fraction/marker string: `"X/Y"` (Y≠0, X≤Y), `"full"`, or a plain
+ * A valid fraction/marker string: `"X/Y"` (0 < X ≤ Y), `"full"`, or a plain
  * positive number interpreted as a multiplier of the project's max budget
  * (e.g. `"0.5"` = 50% of max, `"2"` = 200% of max).
  */
@@ -169,7 +169,7 @@ function isValidFraction(value: string): boolean {
   if (match !== null) {
     const numerator = Number(match[1]);
     const denominator = Number(match[2]);
-    return denominator > 0 && numerator >= 0 && numerator <= denominator;
+    return denominator > 0 && numerator > 0 && numerator <= denominator;
   }
 
   // Plain positive number (decimal or integer)
@@ -724,7 +724,7 @@ export default function AutomationPage() {
                 <Input
                   id="bid-amount-fractions"
                   value={bidAmountOptionsText ?? settings.bidAmountFractions.join(", ")}
-                  placeholder="1/4, 0.5, 0.8, 2, full"
+                  placeholder="1/4, 1/3, 1/2, 2/3, full"
                   onChange={(event) => {
                     const text = event.target.value;
                     setBidAmountOptionsText(text);

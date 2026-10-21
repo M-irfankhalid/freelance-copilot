@@ -129,7 +129,7 @@ export function useInfiniteJobs(): UseInfiniteJobsResult {
   const [scanning, setScanning] = useState(false);
   const [resetKey, setResetKey] = useState(0);
 
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLElement | null>(null);
   const loadingRef = useRef(false);
   const autoScannedRef = useRef(false);
 

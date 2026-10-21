@@ -3,6 +3,7 @@ import { CircleCheck, CircleX, Info, KeyRound, Lock, PlugZap, RefreshCw } from "
 
 import { PageHeader } from "@/components/shared/page-header";
 import { DiscordCard } from "@/components/discord/discord-card";
+import { McpCard } from "@/components/mcp/mcp-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -157,6 +158,7 @@ export default function PlatformsPage() {
   const changeModel = async (body: {
     analysisModelId?: string;
     proposalModelId?: string;
+    agentModelId?: string;
     analysisEngine?: "llm" | "jev";
     jevModelId?: string;
   }): Promise<boolean> => {
@@ -310,7 +312,8 @@ export default function PlatformsPage() {
                         <p className="text-xs text-muted-foreground">
                           Screening runs on one of two engines: your relevance
                           model, or Jev — a decision model that returns a score
-                          without writing prose. A strong model writes proposals.
+                          without writing prose. A strong model writes proposals,
+                          and a tool-capable model runs the Agent chat.
                         </p>
 
                         <div className="flex flex-col gap-1.5">
@@ -424,6 +427,13 @@ export default function PlatformsPage() {
                           options={models.data?.models ?? []}
                           onPick={(modelId) => void changeModel({ proposalModelId: modelId })}
                         />
+                        <ModelSelector
+                          label="Agent model"
+                          hint="Used only for Agent chat. Must support tool calling; the agent reads your saved data and, when you enable Allow changes, writes profile and draft-proposal edits."
+                          current={credential.agentModelId}
+                          options={models.data?.models ?? []}
+                          onPick={(modelId) => void changeModel({ agentModelId: modelId })}
+                        />
                       </div>
                     ) : null}
 
@@ -464,6 +474,8 @@ export default function PlatformsPage() {
           );
         })}
       </div>
+
+      <McpCard />
 
       <DiscordCard />
 

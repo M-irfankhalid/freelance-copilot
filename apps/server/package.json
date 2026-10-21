@@ -3,16 +3,19 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "mcp": "tsx src/mcp/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
+    "proposals:eval": "tsx src/scripts/evaluate-proposals.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push"
   },
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "better-sqlite3": "^13.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",

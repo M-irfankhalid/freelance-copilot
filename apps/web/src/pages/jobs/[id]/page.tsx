@@ -62,18 +62,16 @@ export default function JobDetailPage() {
   const [milestonePercentage, setMilestonePercentage] = useState("50");
   const [deliveryDaysText, setDeliveryDaysText] = useState<string | null>(null);
 
-  // Bid amount the form starts from: the gate's pick when AI bid-amount selection
-  // was on, or the default-markup amount (min + markup% of max) when it was off.
-  // Held as raw text (null = untouched) so the field can be cleared while editing,
-  // and falls back to empty when no suggestion exists — matching the pre-feature
-  // behaviour.
+  // The server already resolves the current AI/default-markup suggestion and
+  // clamps it to the user's bounds, so the form starts from that single value.
+  // Held as raw text (null = untouched) so the field can be cleared while
+  // editing, and falls back to empty when no suggestion exists.
   const bidAmountValue =
     bidAmountText ??
-    (job?.bidAmount != null
-      ? String(job.bidAmount)
-      : job?.suggestedBidAmount != null
-        ? String(job.suggestedBidAmount)
-        : "");
+    (job?.suggestedBidAmount != null ? String(job.suggestedBidAmount) : "");
+  const bidAmountNumber = bidAmountValue
+    ? parseInt(bidAmountValue.replace(/[^0-9]/g, ""), 10) || 0
+    : 0;
   const [generatingProposal, setGeneratingProposal] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [placingBid, setPlacingBid] = useState(false);
@@ -195,6 +193,9 @@ export default function JobDetailPage() {
             body: {
               projectType: job.projectType,
               bidPeriod: job.bidPeriod,
+              budgetLabel: job.budgetLabel,
+              bidAmount: bidAmountNumber > 0 ? bidAmountNumber : null,
+              deliveryDays,
               upgrades: job.upgrades,
               competition: job.competition,
             },
@@ -224,6 +225,9 @@ export default function JobDetailPage() {
             },
             projectType: job.projectType,
             bidPeriod: job.bidPeriod,
+            budgetLabel: job.budgetLabel,
+            bidAmount: bidAmountNumber > 0 ? bidAmountNumber : null,
+            deliveryDays,
             upgrades: job.upgrades,
             competition: job.competition,
           },
@@ -243,7 +247,7 @@ export default function JobDetailPage() {
     setPlacingBid(true);
     setBidError(null);
     try {
-      const bidValue = bidAmountValue ? parseInt(bidAmountValue.replace(/[^0-9]/g, ""), 10) || 0 : 0;
+      const bidValue = bidAmountNumber;
       const milestone = Number(milestonePercentage);
       if (!Number.isFinite(milestone) || milestone < 20 || milestone > 100) {
         setBidError("Milestone percentage must be between 20 and 100.");

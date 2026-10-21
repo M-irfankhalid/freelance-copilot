@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Download, Search } from "lucide-react";
+import { Download, Loader2, RefreshCw, Search } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { LogLevelBadge } from "@/components/shared/badges";
@@ -20,28 +20,55 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { api } from "@/lib/api/client";
 import { useApi } from "@/lib/api/hooks";
+import { useToast } from "@/components/ui/toast";
 import type { LogEntry } from "@/lib/types";
 
 /** Response shape from GET /api/logs. */
+interface LogRow {
+  id: string;
+  time: string;
+  level: string;
+  category: string;
+  message: string;
+  timeLabel: string;
+}
+
 interface LogsApiResponse {
-  logs: Array<{
-    id: string;
-    time: string;
-    level: string;
-    category: string;
-    message: string;
-    timeLabel: string;
-  }>;
+  logs: LogRow[];
   total: number;
   hasMore: boolean;
 }
 
+const LOG_PAGE_SIZE = 50;
+const MAX_EXPORT_LOGS = 5000;
+
+function toLogEntry(log: LogRow): LogEntry {
+  return {
+    id: log.id,
+    timeLabel: log.timeLabel,
+    level: log.level as LogEntry["level"],
+    category: log.category as LogEntry["category"],
+    message: log.message,
+  };
+}
+
+function csvCell(value: unknown): string {
+  const text = String(value ?? "");
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
 /** Every meaningful thing the system did, newest first. */
 export default function LogsPage() {
+  const { toast } = useToast();
   const [level, setLevel] = useState("all");
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
+  const [extraEntries, setExtraEntries] = useState<LogEntry[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -54,16 +81,84 @@ export default function LogsPage() {
 
   const { data, error, isLoading, refetch } = useApi<LogsApiResponse>(queryString);
 
-  const entries: LogEntry[] = useMemo(() => {
-    if (!data?.logs) return [];
-    return data.logs.map((l) => ({
-      id: l.id,
-      timeLabel: l.timeLabel,
-      level: l.level as LogEntry["level"],
-      category: l.category as LogEntry["category"],
-      message: l.message,
-    }));
-  }, [data]);
+  const entries = useMemo<LogEntry[]>(
+    () => [...(data?.logs ?? []).map(toLogEntry), ...extraEntries],
+    [data, extraEntries]
+  );
+
+  const withParams = (params: URLSearchParams) => {
+    const separator = queryString.includes("?") ? "&" : "?";
+    return `${queryString}${separator}${params.toString()}`;
+  };
+
+  const resetPaging = () => setExtraEntries([]);
+
+  const loadMore = async () => {
+    if (loadingMore || data === null) return;
+    setLoadingMore(true);
+    try {
+      const page = await api<LogsApiResponse>(
+        withParams(
+          new URLSearchParams({
+            limit: String(LOG_PAGE_SIZE),
+            offset: String(entries.length),
+          })
+        )
+      );
+      setExtraEntries((current) => [...current, ...page.logs.map(toLogEntry)]);
+    } catch (cause) {
+      toast({
+        title: "Could not load more logs",
+        description: cause instanceof Error ? cause.message : "Unknown error",
+        variant: "error",
+      });
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const exportLogs = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const result = await api<LogsApiResponse>(
+        withParams(
+          new URLSearchParams({
+            limit: String(MAX_EXPORT_LOGS),
+            offset: "0",
+          })
+        )
+      );
+      const csv = [
+        ["Time", "Level", "Category", "Message"],
+        ...result.logs.map((log) => [log.time, log.level, log.category, log.message]),
+      ]
+        .map((row) => row.map(csvCell).join(","))
+        .join("\r\n");
+      const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `logs-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Logs exported",
+        description: `${result.logs.length} entries downloaded.`,
+        variant: "success",
+      });
+    } catch (cause) {
+      toast({
+        title: "Could not export logs",
+        description: cause instanceof Error ? cause.message : "Unknown error",
+        variant: "error",
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4 md:gap-6">
@@ -77,10 +172,24 @@ export default function LogsPage() {
               : "Scans, analyses, proposals, bids, and errors — the full audit trail."
         }
         actions={
-          <Button variant="outline" onClick={() => refetch()}>
-            <Download data-icon="inline-start" />
-            Export
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => refetch()} disabled={isLoading}>
+              <RefreshCw data-icon="inline-start" />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void exportLogs()}
+              disabled={exporting || entries.length === 0}
+            >
+              {exporting ? (
+                <Loader2 data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <Download data-icon="inline-start" />
+              )}
+              {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
+          </div>
         }
       />
 
@@ -92,13 +201,22 @@ export default function LogsPage() {
           />
           <Input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              resetPaging();
+            }}
             placeholder="Search messages"
             className="pl-8"
             aria-label="Search logs"
           />
         </div>
-        <Select value={level} onValueChange={setLevel}>
+        <Select
+          value={level}
+          onValueChange={(value) => {
+            setLevel(value);
+            resetPaging();
+          }}
+        >
           <SelectTrigger aria-label="Filter by level" className="w-36">
             <SelectValue />
           </SelectTrigger>
@@ -110,7 +228,13 @@ export default function LogsPage() {
             <SelectItem value="error">Error</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={category} onValueChange={setCategory}>
+        <Select
+          value={category}
+          onValueChange={(value) => {
+            setCategory(value);
+            resetPaging();
+          }}
+        >
           <SelectTrigger aria-label="Filter by category" className="w-40">
             <SelectValue />
           </SelectTrigger>
@@ -163,13 +287,20 @@ export default function LogsPage() {
         ) : null}
       </div>
 
-      {data && data.hasMore && (
+      {data && entries.length < data.total ? (
         <div className="flex justify-center py-4">
-          <Button variant="outline" onClick={() => refetch()}>
-            Load more
+          <Button
+            variant="outline"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? (
+              <Loader2 data-icon="inline-start" className="animate-spin" />
+            ) : null}
+            {loadingMore ? "Loading…" : "Load more"}
           </Button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

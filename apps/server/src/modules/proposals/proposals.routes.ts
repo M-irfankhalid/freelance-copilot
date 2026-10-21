@@ -101,6 +101,7 @@ proposalsRouter.post("/generate", async (req, res, next) => {
         projectId: z.number().int().positive(),
         jobTitle: z.string().min(1).max(500),
         clientName: z.string().min(1).max(200),
+        budgetLabel: z.string().max(100).nullable().optional(),
         description: z.array(z.string()).default([]),
         jobSkills: z.array(z.string()).default([]),
         bidStats: z
@@ -113,6 +114,8 @@ proposalsRouter.post("/generate", async (req, res, next) => {
           .optional(),
         projectType: z.string().nullable().optional(),
         bidPeriod: z.number().nullable().optional(),
+        bidAmount: z.number().int().positive().nullable().optional(),
+        deliveryDays: z.number().int().min(1).max(365).nullable().optional(),
         upgrades: z
           .object({
             featured: z.boolean(),
@@ -146,7 +149,10 @@ proposalsRouter.post("/generate", async (req, res, next) => {
       input.projectType,
       input.bidPeriod,
       input.upgrades,
-      input.competition
+      input.competition,
+      input.budgetLabel,
+      input.bidAmount,
+      input.deliveryDays
     );
 
     res.json(result);
@@ -162,6 +168,9 @@ proposalsRouter.post("/:id/regenerate", async (req, res, next) => {
       z.object({
         projectType: z.string().nullable().optional(),
         bidPeriod: z.number().nullable().optional(),
+        budgetLabel: z.string().max(100).nullable().optional(),
+        bidAmount: z.number().int().positive().nullable().optional(),
+        deliveryDays: z.number().int().min(1).max(365).nullable().optional(),
         upgrades: z
           .object({
             featured: z.boolean(),
@@ -189,7 +198,10 @@ proposalsRouter.post("/:id/regenerate", async (req, res, next) => {
       input.projectType,
       input.bidPeriod,
       input.upgrades,
-      input.competition
+      input.competition,
+      input.budgetLabel,
+      input.bidAmount,
+      input.deliveryDays
     );
 
     res.json({ proposal: { content, competitorNote }, competitorNote });

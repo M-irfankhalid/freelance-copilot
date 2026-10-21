@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { Link } from "react-router";
-import { Bot } from "lucide-react";
+
+import { BrandLogo } from "@/components/shared/brand-logo";
 
 /**
  * Centered shell for unauthenticated screens: brand mark, card content,
@@ -23,9 +24,7 @@ export function AuthShell({
         to="/"
         className="flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
-        <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
-          <Bot className="size-4.5" aria-hidden />
-        </span>
+        <BrandLogo className="size-8 text-foreground" />
         Freelance Copilot
       </Link>
 

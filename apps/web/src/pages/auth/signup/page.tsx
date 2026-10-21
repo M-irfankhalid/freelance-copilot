@@ -54,7 +54,7 @@ export default function SignupPage() {
       }
       const body = (await response.json()) as { backupCodes: string[] };
       setCodes(body.backupCodes);
-      refresh();
+      await refresh();
       setStep("codes");
     } catch (cause) {
       setError(

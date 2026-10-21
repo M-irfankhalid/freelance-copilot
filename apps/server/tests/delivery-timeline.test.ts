@@ -18,7 +18,9 @@ const {
   resolveDefaultBidAmount,
   resolveBidAmount,
   extractClientMentionedBudget,
-  roundUpToStep,
+  roundToNearestStep,
+  roundFixedBidAmount,
+  isValidBidAmountFraction,
 } = await import("../src/lib/delivery-timeline.js");
 // ^ DEFAULT_BID_AMOUNT_INSTRUCTORS intentionally omitted: not asserted here
 
@@ -91,7 +93,7 @@ describe("sanitizeBidAmountFractions", () => {
 
   it("drops invalid fractions", () => {
     expect(
-      sanitizeBidAmountFractions(["foo", "3/2", "1/0", "-1/2", 123, null, "", "3/4"])
+      sanitizeBidAmountFractions(["foo", "3/2", "1/0", "0/2", "-1/2", 123, null, "", "3/4"])
     ).toEqual(["3/4"]);
   });
 
@@ -107,6 +109,24 @@ describe("sanitizeBidAmountFractions", () => {
     const copy = sanitizeBidAmountFractions(null);
     copy.push("9/10");
     expect(sanitizeBidAmountFractions(null)).toEqual([...DEFAULT_BID_AMOUNT_FRACTIONS]);
+  });
+});
+
+describe("isValidBidAmountFraction", () => {
+  it("accepts fractions, full, and positive multipliers", () => {
+    expect(isValidBidAmountFraction("1/2")).toBe(true);
+    expect(isValidBidAmountFraction("full")).toBe(true);
+    expect(isValidBidAmountFraction("0.5")).toBe(true);
+    expect(isValidBidAmountFraction("2")).toBe(true);
+  });
+
+  it("rejects zero, inverted fractions, and junk", () => {
+    expect(isValidBidAmountFraction("0/2")).toBe(false);
+    expect(isValidBidAmountFraction("2/1")).toBe(false);
+    expect(isValidBidAmountFraction("0")).toBe(false);
+    expect(isValidBidAmountFraction("0.0")).toBe(false);
+    expect(isValidBidAmountFraction("1/0")).toBe(false);
+    expect(isValidBidAmountFraction("foo")).toBe(false);
   });
 });
 
@@ -134,6 +154,7 @@ describe("parseBidAmountFraction", () => {
   it("returns null for invalid fraction expressions", () => {
     expect(parseBidAmountFraction("foo", 1000)).toBeNull();
     expect(parseBidAmountFraction("1/0", 1000)).toBeNull();
+    expect(parseBidAmountFraction("0/2", 1000)).toBeNull();
     expect(parseBidAmountFraction("-1/2", 1000)).toBeNull();
     expect(parseBidAmountFraction("3/2", 1000)).toBeNull(); // numerator > denominator
   });
@@ -194,15 +215,13 @@ describe("resolveBidAmountOptions", () => {
     expect(resolveBidAmountOptions(["1/2", "full"], 200, 100)).toEqual([100, 200]);
   });
 
-  it("appends a client-mentioned budget as an explicit option when provided", () => {
-    // Caller is responsible for validating the range via extractClientMentionedBudget;
-    // resolveBidAmountOptions trusts the value and appends it.
-    expect(resolveBidAmountOptions(["1/2", "full"], 250, 50)).toEqual([125, 250, 50]);
+  it("dedupes amounts that different fraction spellings resolve to", () => {
+    // JSON-schema enums require unique values, and "1/2" + "0.5" both give 500.
+    expect(resolveBidAmountOptions(["1/2", "0.5", "full"], 1000)).toEqual([500, 1000]);
   });
 
-  it("does not duplicate an option already produced by a fraction", () => {
-    // 1/2 of 200 = 100; client also mentioned 100 → no duplicate
-    expect(resolveBidAmountOptions(["1/2", "full"], 200, 100)).toEqual([100, 200]);
+  it("drops options that resolve to zero on a tiny budget", () => {
+    expect(resolveBidAmountOptions(["1/4", "full"], 1)).toEqual([1]);
   });
 });
 
@@ -231,19 +250,48 @@ describe("extractClientMentionedBudget", () => {
     const desc = "I can pay $100 or maybe $200 for this";
     expect(extractClientMentionedBudget(desc, 30, 250)).toBe(100);
   });
+
+  it("parses thousands separators and decimals correctly", () => {
+    expect(extractClientMentionedBudget("My budget is $12,500", 10000, 20000)).toBe(12500);
+    expect(extractClientMentionedBudget("I can pay $50.50", 30, 100)).toBe(51);
+  });
+
+  it("ignores numbers that are not attached to money words", () => {
+    const desc = "I need 3 pages built in 5 days for React 19";
+    expect(extractClientMentionedBudget(desc, 1, 100)).toBeNull();
+  });
+
+  it("accepts a budget keyword followed by a plain amount", () => {
+    expect(extractClientMentionedBudget("budget: 750", 500, 1000)).toBe(750);
+  });
 });
 
-describe("roundUpToStep", () => {
+describe("roundToNearestStep", () => {
   it("rounds to the nearest multiple", () => {
-    expect(roundUpToStep(187, 10)).toBe(190); // 187 → 190
-    expect(roundUpToStep(183, 10)).toBe(180); // 183 → 180
-    expect(roundUpToStep(500, 100)).toBe(500);
-    expect(roundUpToStep(550, 100)).toBe(600);
+    expect(roundToNearestStep(187, 10)).toBe(190); // 187 → 190
+    expect(roundToNearestStep(183, 10)).toBe(180); // 183 → 180
+    expect(roundToNearestStep(500, 100)).toBe(500);
+    expect(roundToNearestStep(550, 100)).toBe(600);
   });
 
   it("returns the value unchanged when step is 0 or 1", () => {
-    expect(roundUpToStep(187, 0)).toBe(187);
-    expect(roundUpToStep(187, 1)).toBe(187);
+    expect(roundToNearestStep(187, 0)).toBe(187);
+    expect(roundToNearestStep(187, 1)).toBe(187);
+  });
+});
+
+describe("roundFixedBidAmount", () => {
+  it("bumps a rounded-down result back above the project minimum", () => {
+    // Nearest rounding would give 90, below the $100 minimum Freelancer requires.
+    expect(roundFixedBidAmount(100, 30, 100)).toBe(120);
+  });
+
+  it("keeps a rounded result that is still above the minimum", () => {
+    expect(roundFixedBidAmount(187, 10, 100)).toBe(190);
+  });
+
+  it("still applies the minimum when rounding is off", () => {
+    expect(roundFixedBidAmount(50, 0, 100)).toBe(100);
   });
 });
 
@@ -366,6 +414,16 @@ describe("resolveBidAmount", () => {
     expect(resolveBidAmount(noRound0, 187, 100, 750, "fixed")).toBe(187);
     const noRound1 = { ...on, roundBidUpTo: 1 };
     expect(resolveBidAmount(noRound1, 187, 100, 750, "fixed")).toBe(187);
+  });
+
+  it("keeps the final amount within [minBid, maxBid] after rounding", () => {
+    // 250 rounds to 300 with a $100 step, but maxBid is 250.
+    const capped = { ...off, maxBid: 250, roundBidUpTo: 100 };
+    expect(resolveBidAmount(capped, null, 250, undefined, "fixed")).toBe(250);
+
+    // Nearest rounding would give 90, below the $100 minimum budget.
+    const minGuard = { ...on, minBid: 1, maxBid: 1000, roundBidUpTo: 30 };
+    expect(resolveBidAmount(minGuard, 100, 100, 750, "fixed")).toBe(120);
   });
 });
 

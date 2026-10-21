@@ -17,6 +17,10 @@ build
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Downloaded tunnel-client, generated profile, and database backups
+apps/server/data/mcp/
+apps/server/data/*.backup-*
 # Anchored to repo root. A bare `data/` also matches apps/web/src/lib/data/,
 # which silently excluded 7 real source files from version control.
 /data/

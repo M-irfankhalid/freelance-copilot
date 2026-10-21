@@ -66,13 +66,10 @@ export const userProfile = sqliteTable("user_profile", {
   title: text("title"),
   hourlyRate: text("hourly_rate"),
   about: text("about"),
-  /** JSON-encoded string arrays and structured lists. */
+  /** JSON-encoded string arrays. */
   skills: text("skills"),
   /** JSON-encoded array of numeric Freelancer.com skill/category ids for the user's skills. */
   skillIds: text("skill_ids"),
-  experience: text("experience"),
-  portfolio: text("portfolio"),
-  certifications: text("certifications"),
   preferredProjectTypes: text("preferred_project_types"),
   wants: text("wants"),
   notWants: text("not_wants"),
@@ -85,9 +82,13 @@ export const userProfile = sqliteTable("user_profile", {
   relevancyInstructions: text("relevancy_instructions"),
   /** Markdown summary of the user's portfolio projects, used in proposals. */
   portfolioSummary: text("portfolio_summary"),
-  /** Markdown block holding all the user's proposal templates, used in proposals. */
-  proposalTemplates: text("proposal_templates"),
-  updatedAt: text("updated_at").notNull(),
+    /** Markdown block holding all the user's proposal templates, used in proposals. */
+    proposalTemplates: text("proposal_templates"),
+    /** Editable system prompt for proposal generation. Null means use the default. */
+    proposalSystemInstructions: text("proposal_system_instructions"),
+    /** Editable pre-instructions placed before profile facts in the proposal prompt. */
+    proposalWritingInstructions: text("proposal_writing_instructions"),
+    updatedAt: text("updated_at").notNull(),
 });
 
 export const jobs = sqliteTable("jobs", {
@@ -261,8 +262,29 @@ export const automationSettings = sqliteTable("automation_settings", {
   defaultBidMarkupPct: integer("default_bid_markup_pct").notNull().default(0),
   /** Guidance for the default markup rule. Null → the default text. */
   bidAmountMarkupInstructions: text("bid_amount_markup_instructions"),
-  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  /** Round the final bid amount to the nearest multiple of this value (0 = no rounding). */
   roundBidUpTo: integer("round_bid_up_to").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Per-user AI tuning: temperatures, token caps, timeouts, and score bands. */
+export const aiSettings = sqliteTable("ai_settings", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  relevanceTemperature: real("relevance_temperature").notNull().default(0.2),
+  relevanceMaxTokens: integer("relevance_max_tokens").notNull().default(500),
+  relevanceTimeoutSeconds: integer("relevance_timeout_seconds").notNull().default(120),
+  analysisTemperature: real("analysis_temperature").notNull().default(0.2),
+  analysisMaxTokens: integer("analysis_max_tokens").notNull().default(1000),
+  analysisTimeoutSeconds: integer("analysis_timeout_seconds").notNull().default(120),
+  proposalTemperature: real("proposal_temperature").notNull().default(0.5),
+  proposalTimeoutSeconds: integer("proposal_timeout_seconds").notNull().default(180),
+  proposalCorrectionAttempts: integer("proposal_correction_attempts").notNull().default(1),
+  relevanceIgnoreFloor: integer("relevance_ignore_floor").notNull().default(50),
+  goodScoreFloor: integer("good_score_floor").notNull().default(75),
+  strongScoreFloor: integer("strong_score_floor").notNull().default(90),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -289,5 +311,21 @@ export const discordSettings = sqliteTable("discord_settings", {
   webhookAuthTag: text("webhook_auth_tag"),
   /** JSON array of enabled events: match | needs_review | bid_placed | bid_failed | api_error. */
   events: text("events").notNull().default("[]"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** Secure MCP Tunnel configuration. The runtime API key is encrypted at rest. */
+export const mcpSettings = sqliteTable("mcp_settings", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tunnelId: text("tunnel_id"),
+  apiKeyCipherText: text("api_key_cipher_text"),
+  apiKeyIv: text("api_key_iv"),
+  apiKeyAuthTag: text("api_key_auth_tag"),
+  /** Expose write tools to ChatGPT (profile + draft proposals only). */
+  allowWrites: integer("allow_writes").notNull().default(1),
+  /** Desired state: start the tunnel automatically on server boot. */
+  enabled: integer("enabled").notNull().default(0),
   updatedAt: text("updated_at").notNull(),
 });

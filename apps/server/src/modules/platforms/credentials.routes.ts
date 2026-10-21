@@ -30,9 +30,10 @@ credentialsRouter.get("/", (_req, res) => {
   res.json({ credentials: listCredentials() });
 });
 
-/** Select the OpenRouter models. Two roles — analysis (cheap/fast) and
- *  proposal (strong) — plus the engine behind the relevance gate. The legacy
- *  single `modelId` field still works and applies to both roles. */
+/** Select the OpenRouter models. Three roles — analysis (cheap/fast),
+ *  proposal (strong), and agent chat (tool calling) — plus the engine behind
+ *  the relevance gate. The legacy single `modelId` field still works and
+ *  applies to every role. */
 credentialsRouter.put("/openrouter/model", (req, res, next) => {
   try {
     const input = parseBody(
@@ -41,6 +42,7 @@ credentialsRouter.put("/openrouter/model", (req, res, next) => {
           modelId: z.string().min(1).max(200).optional(),
           analysisModelId: z.string().min(1).max(200).optional(),
           proposalModelId: z.string().min(1).max(200).optional(),
+          agentModelId: z.string().min(1).max(200).optional(),
           analysisEngine: z.enum(["llm", "jev"]).optional(),
           jevModelId: z.string().min(1).max(200).optional(),
         })
@@ -49,6 +51,7 @@ credentialsRouter.put("/openrouter/model", (req, res, next) => {
             d.modelId !== undefined ||
             d.analysisModelId !== undefined ||
             d.proposalModelId !== undefined ||
+            d.agentModelId !== undefined ||
             d.analysisEngine !== undefined ||
             d.jevModelId !== undefined,
           { message: "Provide at least one setting" }

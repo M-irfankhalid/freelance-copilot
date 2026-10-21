@@ -109,6 +109,7 @@ async function openRouterSummary(): Promise<
   | {
       analysisModelId: string | null;
       proposalModelId: string | null;
+      agentModelId: string | null;
       analysisEngine: string;
       jevModelId: string | null;
     }
@@ -120,6 +121,7 @@ async function openRouterSummary(): Promise<
       id: string;
       analysisModelId: string | null;
       proposalModelId: string | null;
+      agentModelId: string | null;
       analysisEngine: string;
       jevModelId: string | null;
     }>;
@@ -229,7 +231,7 @@ describe("credentials", () => {
     expect(body.models.map((m) => m.id)).toEqual(["alpha/model", "zeta/model"]);
   });
 
-  it("select distinct analysis and proposal models, falling back to legacy modelId", async () => {
+  it("select distinct analysis, proposal, and agent models, falling back to legacy modelId", async () => {
     // Save a working OpenRouter key first.
     const save = await fetch(`${baseUrl}/api/credentials/openrouter`, {
       method: "PUT",
@@ -260,14 +262,30 @@ describe("credentials", () => {
         modelId: string | null;
         analysisModelId: string | null;
         proposalModelId: string | null;
+        agentModelId: string | null;
       }>;
     };
     const openrouter = list.credentials.find((c) => (c as { id?: string }).id === "openrouter");
     expect(openrouter).toBeDefined();
     expect(openrouter?.analysisModelId).toBe("alpha/model");
     expect(openrouter?.proposalModelId).toBe("zeta/model");
+    // The legacy model applied to every role, so the agent keeps alpha until
+    // it gets its own explicit selection.
+    expect(openrouter?.agentModelId).toBe("alpha/model");
     // Legacy modelId mirrors the proposal model.
     expect(openrouter?.modelId).toBe("zeta/model");
+
+    const agent = await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ agentModelId: "tool/model" }),
+    });
+    expect(agent.status).toBe(200);
+
+    const after = await openRouterSummary();
+    expect(after?.analysisModelId).toBe("alpha/model");
+    expect(after?.proposalModelId).toBe("zeta/model");
+    expect(after?.agentModelId).toBe("tool/model");
   });
 
   it("default to the chat engine and persist the Jev decision engine", async () => {
@@ -317,6 +335,11 @@ describe("credentials", () => {
     await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
       method: "PUT",
       headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ agentModelId: "tool/model" }),
+    });
+    await fetch(`${baseUrl}/api/credentials/openrouter/model`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
       body: JSON.stringify({ analysisEngine: "jev", jevModelId: "typesafe/jev-1.13" }),
     });
 
@@ -330,6 +353,7 @@ describe("credentials", () => {
     const cred = await openRouterSummary();
     expect(cred?.analysisModelId).toBe("alpha/model");
     expect(cred?.proposalModelId).toBe("zeta/model");
+    expect(cred?.agentModelId).toBe("tool/model");
     expect(cred?.analysisEngine).toBe("jev");
     expect(cred?.jevModelId).toBe("typesafe/jev-1.13");
   });

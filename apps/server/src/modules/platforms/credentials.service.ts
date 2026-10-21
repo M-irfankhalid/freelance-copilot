@@ -43,6 +43,8 @@ interface CredentialMeta {
   analysisModelId?: string;
   /** Model used for proposal writing (Model B). */
   proposalModelId?: string;
+  /** Model used for the in-app agent chat (Model C). */
+  agentModelId?: string;
   /**
    * Engine behind the relevance gate. Absent means "llm", so installs saved
    * before Jev existed keep behaving exactly as they did.
@@ -77,6 +79,8 @@ export interface CredentialSummary {
   analysisModelId: string | null;
   /** Model used for proposal writing. */
   proposalModelId: string | null;
+  /** Model used for the in-app agent chat. */
+  agentModelId: string | null;
   /** Engine behind the relevance gate ("llm" unless the user picked Jev). */
   analysisEngine: AnalysisEngine;
   /** Jev model id, when the relevance gate runs on Jev. */
@@ -99,6 +103,7 @@ export function listCredentials(): CredentialSummary[] {
         modelId: null,
         analysisModelId: null,
         proposalModelId: null,
+        agentModelId: null,
         analysisEngine: "llm" as const,
         jevModelId: null,
         usage: undefined,
@@ -123,6 +128,7 @@ export function listCredentials(): CredentialSummary[] {
       modelId,
       analysisModelId: meta.analysisModelId ?? modelId,
       proposalModelId: meta.proposalModelId ?? modelId,
+      agentModelId: meta.agentModelId ?? meta.proposalModelId ?? modelId,
       analysisEngine: meta.analysisEngine ?? "llm",
       jevModelId: meta.jevModelId ?? null,
       usage: meta.usage,
@@ -295,6 +301,7 @@ export function setModel(input: {
   modelId?: string;
   analysisModelId?: string;
   proposalModelId?: string;
+  agentModelId?: string;
   analysisEngine?: AnalysisEngine;
   jevModelId?: string;
 }): void {
@@ -312,10 +319,11 @@ export function setModel(input: {
   }
   const meta = { ...parseMeta(row.meta) };
   if (input.modelId !== undefined) {
-    // Legacy single-model selection applies to both roles.
+    // Legacy single-model selection applies to every role.
     meta.modelId = input.modelId;
     meta.analysisModelId = input.modelId;
     meta.proposalModelId = input.modelId;
+    meta.agentModelId = input.modelId;
   }
   if (input.analysisModelId !== undefined) {
     meta.analysisModelId = input.analysisModelId;
@@ -324,6 +332,9 @@ export function setModel(input: {
     meta.proposalModelId = input.proposalModelId;
     // Keep the legacy pointer on the "main" model for any old readers.
     meta.modelId = input.proposalModelId;
+  }
+  if (input.agentModelId !== undefined) {
+    meta.agentModelId = input.agentModelId;
   }
   if (input.analysisEngine !== undefined) {
     meta.analysisEngine = input.analysisEngine;

@@ -5,6 +5,7 @@ import { parseBody } from "../../lib/validate.js";
 import {
   MAX_DELIVERY_DAYS,
   MIN_DELIVERY_DAYS,
+  isValidBidAmountFraction,
 } from "../../lib/delivery-timeline.js";
 import { requireUser } from "../../middleware/require-user.js";
 import {
@@ -70,6 +71,10 @@ automationRouter.put("/", async (req, res, next) => {
           .array(z.string().max(20))
           .min(1)
           .max(50)
+          .refine((values) => values.every(isValidBidAmountFraction), {
+            message:
+              "Each option must be a fraction (1/2), a positive multiplier (0.5, 2), or full",
+          })
           .optional(),
         bidAmountInstructions: z.string().max(2000).optional(),
         defaultBidMarkupPct: z.number().int().min(0).max(100).optional(),

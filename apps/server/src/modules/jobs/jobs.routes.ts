@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { parseBody } from "../../lib/validate.js";
 import { requireUser } from "../../middleware/require-user.js";
@@ -212,10 +212,11 @@ jobsRouter.get("/", (req, res, next) => {
 
     // Count total matching rows (before in-memory skills filter, which is
     // applied in listStoredJobs and not worth a separate filtered COUNT).
-    const totalRow = getDb()
-      .select({ count: sql`count(*)` })
-      .from(jobsTable)
-      .get();
+    const countQuery = getDb().select({ count: sql`count(*)` }).from(jobsTable);
+    const totalRow =
+      status !== undefined
+        ? countQuery.where(eq(jobsTable.status, status)).get()
+        : countQuery.get();
     const total = Number(totalRow?.count ?? 0);
 
     res.json({

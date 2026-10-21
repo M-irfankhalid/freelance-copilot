@@ -111,9 +111,6 @@ beforeAll(async () => {
       about: "I build React and Node applications.",
       skills: ["React.js", "Node.js"],
       skillIds: [759, 500],
-      experience: [],
-      portfolio: [],
-      certifications: [],
       preferredProjectTypes: ["Fixed price"],
       wants: ["React"],
       notWants: ["crypto"],
@@ -230,9 +227,9 @@ describe("automation settings", () => {
       expect(settings.preferredDeliveryDays).toBe(4);
       expect(settings.deliveryTimelineOptions).toEqual([1, 3, 5, 7, 10]);
       expect(String(settings.deliveryTimelineInstructions)).toMatch(/shortest/i);
-      // Bid amount: AI selection off, defaults to 1/4, 0.5, 0.8, 2, full.
+      // Bid amount: AI selection off, defaults to 1/4 through full.
       expect(settings.aiBidAmount).toBe(false);
-      expect(settings.bidAmountFractions).toEqual(["1/4", "0.5", "0.8", "2", "full"]);
+      expect(settings.bidAmountFractions).toEqual(["1/4", "1/3", "1/2", "2/3", "full"]);
       expect(String(settings.bidAmountInstructions)).toMatch(/profit/i);
     } finally {
       vi.unstubAllGlobals();
@@ -316,7 +313,7 @@ describe("automation settings", () => {
           preferredDeliveryDays: 4,
           deliveryTimelineOptions: [1, 3, 5, 7, 10],
           aiBidAmount: false,
-          bidAmountFractions: ["1/4", "0.5", "0.8", "2", "full"],
+          bidAmountFractions: ["1/4", "1/3", "1/2", "2/3", "full"],
         }),
       });
     }
@@ -345,6 +342,20 @@ describe("automation settings", () => {
         method: "PUT",
         headers: authed({ "Content-Type": "application/json" }),
         body: JSON.stringify({ bidAmountFractions: [] }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a bid amount fraction that would offer $0", async () => {
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ bidAmountFractions: ["1/2", "0/2"] }),
       });
       expect(res.status).toBe(400);
     } finally {
