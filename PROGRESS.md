@@ -398,4 +398,17 @@ Phase 9 is verified: server typecheck clean, 52/52 tests passing (8 new proposal
 - [x] **Tests**: `tests/ai-settings.test.ts` covers defaults, PUT persistence, band rejection, reset keeping models, tuning reaching the screening request, and configurable bands in Matches/Dashboard. Full server suite: **663/663 passing** across 44 files.
 - [x] Verified: server typecheck + ESLint clean, web typecheck + ESLint clean, `vite build` succeeds.
 
+## Cheap screening toggles at poll time (2026-10-21)
 
+- [x] **Master + per-check switches** (`automation_settings`): `cheap_screening_enabled`, `reject_ignored_countries`, `reject_not_wants`, and `reject_missing_wants`, all ON by default. Schema, idempotent ALTER backfill, service mapping/defaults, and PUT validation updated; the Jev relevance model is untouched.
+- [x] **Poll-time screening** (`jobs.service.ts` `searchJobs`): country, not-wants, and wants are checked against the search payload (title, preview description, skills) before any project detail is fetched. Failing jobs are stored as minimal `ignored` marker rows with `rejectionReason: "Excluded by cheap screening — ..."` and never reach analysis; previously-`new` rows are pulled out of the queue.
+- [x] **Per-check behavior**: `rejectNotWants` hard-fails on a not-wants hit; `rejectMissingWants` hard-fails when wants are set and none appear; `rejectIgnoredCountries` keeps the existing country gate. Turning the master off skips all three so Jev judges every job. Analyzed jobs keep their analysis and ignored jobs keep their original reason.
+- [x] **Analysis path** (`jobs.service.ts` `analyzeJob`): Step 1 honors the same master/per-check switches, while the profile-skills keyword check remains as before. `applyCheapScreen` (`modules/ai/relevancy.ts`) adds per-rule options; `applyRelevancyFilter` keeps the all-rules-on behavior for callers that don't pass options.
+- [x] **Automation UI** (`pages/automation/page.tsx`): "Cheap screening" master switch with country, not-wants, and wants switches underneath (disabled while the master is off); stale-job and bad-reputation rules stay independent.
+- [x] **Tests**: `pipeline.test.ts` proves a not-wants job is rejected during polling (0 analyzed) and that disabling `rejectNotWants` lets it reach analysis; `automation.test.ts` covers the new defaults and PUT round-trip. Full server suite: **664/664 passing** across 44 files. Server + web typecheck clean, both ESLints clean.
+
+## Job page recommendation card (2026-10-21)
+
+- [x] **Recommended bid label**: `analyzeJob` now stores the same suggestion the bid form uses (`computeSuggestedBidAmount`) instead of the hard-coded `—`, so the Agent suggestion card and proposal prompts show the real amount. `getJobById` backfills the label for older analyzed rows that still hold the placeholder.
+- [x] **Delivery time on the card**: the Agent suggestion card shows the AI-picked delivery days (or the client's deadline when AI timeline selection is off), alongside the recommended bid.
+- [x] **Regression tests**: `pipeline.test.ts` now fetches the job detail after analysis and asserts the surfaced `bidAmount`, `suggestedBidAmount`, `deliveryDays`, and `recommendedBidLabel`; `jobs.test.ts` and `ai.test.ts` expect a concrete amount rather than `—`. Full server suite: **664/664 passing** across 44 files.

@@ -625,13 +625,30 @@ export default function JobDetailPage() {
               <CardDescription>{job.suggestion.summary}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <div className="rounded-lg border bg-background p-3">
-                <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                  Recommended bid range
-                </p>
-                <p className="mt-0.5 text-lg font-semibold tabular-nums">
-                  {job.suggestion.recommendedBidLabel}
-                </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border bg-background p-3">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Recommended bid
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                    {job.suggestion.recommendedBidLabel}
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-background p-3">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    Delivery time
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                    {suggestedDeliveryDays} day{suggestedDeliveryDays === 1 ? "" : "s"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {job.deliveryDays != null
+                      ? "AI pick"
+                      : job.bidPeriod != null
+                        ? "Client's deadline"
+                        : "Your usual time"}
+                  </p>
+                </div>
               </div>
 
               <div className="flex flex-col gap-1.5">

@@ -83,8 +83,14 @@ export interface AutomationSettings {
   consecutiveErrors: number;
   /** Reject jobs posted more than 12h ago before they are even stored. */
   rejectStaleJobs: boolean;
+  /** Master switch for the free keyword/country screen run at poll time. */
+  cheapScreeningEnabled: boolean;
   /** Reject jobs whose client country is on the profile ignore list. */
   rejectIgnoredCountries: boolean;
+  /** Reject jobs whose text matches a profile not-wants term. */
+  rejectNotWants: boolean;
+  /** Reject jobs that don't mention any profile wants term (when any are set). */
+  rejectMissingWants: boolean;
   /** Reject brand-new, unverified, no-deposit clients with no upgrades before analysis. */
   rejectBadReputation: boolean;
   /** Let the relevance gate pick each project's delivery time. */
@@ -145,7 +151,10 @@ function rowToSettings(row: {
   paused: number;
   consecutiveErrors: number;
   rejectStaleJobs: number;
+  cheapScreeningEnabled: number;
   rejectIgnoredCountries: number;
+  rejectNotWants: number;
+  rejectMissingWants: number;
   rejectBadReputation: number;
   aiDeliveryTimeline: number;
   preferredDeliveryDays: number;
@@ -175,7 +184,10 @@ function rowToSettings(row: {
     paused: row.paused === 1,
     consecutiveErrors: row.consecutiveErrors ?? 0,
     rejectStaleJobs: (row.rejectStaleJobs ?? 1) === 1,
+    cheapScreeningEnabled: (row.cheapScreeningEnabled ?? 1) === 1,
     rejectIgnoredCountries: (row.rejectIgnoredCountries ?? 1) === 1,
+    rejectNotWants: (row.rejectNotWants ?? 1) === 1,
+    rejectMissingWants: (row.rejectMissingWants ?? 1) === 1,
     rejectBadReputation: (row.rejectBadReputation ?? 1) === 1,
     aiDeliveryTimeline: (row.aiDeliveryTimeline ?? 0) === 1,
     preferredDeliveryDays: row.preferredDeliveryDays ?? DEFAULT_PREFERRED_DELIVERY_DAYS,
@@ -313,7 +325,10 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
         paused: false,
         consecutiveErrors: 0,
         rejectStaleJobs: true,
+        cheapScreeningEnabled: true,
         rejectIgnoredCountries: true,
+        rejectNotWants: true,
+        rejectMissingWants: true,
         rejectBadReputation: true,
         aiDeliveryTimeline: false,
         preferredDeliveryDays: DEFAULT_PREFERRED_DELIVERY_DAYS,
@@ -346,7 +361,10 @@ export async function getOrCreateSettings(userId: string): Promise<AutomationSet
           paused: defaults.paused ? 1 : 0,
           consecutiveErrors: 0,
           rejectStaleJobs: defaults.rejectStaleJobs ? 1 : 0,
+          cheapScreeningEnabled: defaults.cheapScreeningEnabled ? 1 : 0,
           rejectIgnoredCountries: defaults.rejectIgnoredCountries ? 1 : 0,
+          rejectNotWants: defaults.rejectNotWants ? 1 : 0,
+          rejectMissingWants: defaults.rejectMissingWants ? 1 : 0,
           rejectBadReputation: defaults.rejectBadReputation ? 1 : 0,
           aiDeliveryTimeline: defaults.aiDeliveryTimeline ? 1 : 0,
           preferredDeliveryDays: defaults.preferredDeliveryDays,

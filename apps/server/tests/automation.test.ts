@@ -219,7 +219,10 @@ describe("automation settings", () => {
       expect(settings.bidsToday).toBe(0);
       // Pre-analysis screening rules all start ON.
       expect(settings.rejectStaleJobs).toBe(true);
+      expect(settings.cheapScreeningEnabled).toBe(true);
       expect(settings.rejectIgnoredCountries).toBe(true);
+      expect(settings.rejectNotWants).toBe(true);
+      expect(settings.rejectMissingWants).toBe(true);
       expect(settings.rejectBadReputation).toBe(true);
       // Delivery timeline: AI selection off (4 days is what auto-bid hardcoded
       // before the setting existed), with an editable default list + guidance.
@@ -247,7 +250,10 @@ describe("automation settings", () => {
           minMatchScore: 70,
           dailyCap: 3,
           rejectStaleJobs: false,
+          cheapScreeningEnabled: false,
           rejectIgnoredCountries: false,
+          rejectNotWants: false,
+          rejectMissingWants: false,
           rejectBadReputation: false,
           aiDeliveryTimeline: true,
           preferredDeliveryDays: 14,
@@ -264,7 +270,10 @@ describe("automation settings", () => {
           autobidEnabled: boolean;
           minMatchScore: number;
           rejectStaleJobs: boolean;
+          cheapScreeningEnabled: boolean;
           rejectIgnoredCountries: boolean;
+          rejectNotWants: boolean;
+          rejectMissingWants: boolean;
           rejectBadReputation: boolean;
           aiDeliveryTimeline: boolean;
           preferredDeliveryDays: number;
@@ -278,7 +287,10 @@ describe("automation settings", () => {
       expect(settings.autobidEnabled).toBe(true);
       expect(settings.minMatchScore).toBe(70);
       expect(settings.rejectStaleJobs).toBe(false);
+      expect(settings.cheapScreeningEnabled).toBe(false);
       expect(settings.rejectIgnoredCountries).toBe(false);
+      expect(settings.rejectNotWants).toBe(false);
+      expect(settings.rejectMissingWants).toBe(false);
       expect(settings.rejectBadReputation).toBe(false);
       expect(settings.aiDeliveryTimeline).toBe(true);
       expect(settings.preferredDeliveryDays).toBe(14);

@@ -16,15 +16,24 @@ import { automationSettings } from "../../db/schema.js";
 export interface PreAnalysisGates {
   /** Reject jobs posted more than 12h ago before they are even stored. */
   rejectStaleJobs: boolean;
+  /** Master switch for the free keyword/country screen run at poll time. */
+  cheapScreeningEnabled: boolean;
   /** Reject jobs whose client country is on the profile ignore list. */
   rejectIgnoredCountries: boolean;
+  /** Reject jobs whose text matches a profile not-wants term. */
+  rejectNotWants: boolean;
+  /** Reject jobs that don't mention any profile wants term (when any are set). */
+  rejectMissingWants: boolean;
   /** Reject brand-new, unverified clients (no deposit/upgrades) before analysis. */
   rejectBadReputation: boolean;
 }
 
 export const DEFAULT_PREANALYSIS_GATES: PreAnalysisGates = {
   rejectStaleJobs: true,
+  cheapScreeningEnabled: true,
   rejectIgnoredCountries: true,
+  rejectNotWants: true,
+  rejectMissingWants: true,
   rejectBadReputation: true,
 };
 
@@ -35,7 +44,10 @@ export function getPreanalysisGates(userId: string): PreAnalysisGates {
   const row = getDb()
     .select({
       rejectStaleJobs: automationSettings.rejectStaleJobs,
+      cheapScreeningEnabled: automationSettings.cheapScreeningEnabled,
       rejectIgnoredCountries: automationSettings.rejectIgnoredCountries,
+      rejectNotWants: automationSettings.rejectNotWants,
+      rejectMissingWants: automationSettings.rejectMissingWants,
       rejectBadReputation: automationSettings.rejectBadReputation,
     })
     .from(automationSettings)
@@ -45,7 +57,10 @@ export function getPreanalysisGates(userId: string): PreAnalysisGates {
   if (row === undefined) return DEFAULT_PREANALYSIS_GATES;
   return {
     rejectStaleJobs: row.rejectStaleJobs === 1,
+    cheapScreeningEnabled: row.cheapScreeningEnabled === 1,
     rejectIgnoredCountries: row.rejectIgnoredCountries === 1,
+    rejectNotWants: row.rejectNotWants === 1,
+    rejectMissingWants: row.rejectMissingWants === 1,
     rejectBadReputation: row.rejectBadReputation === 1,
   };
 }

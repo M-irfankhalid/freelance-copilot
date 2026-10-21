@@ -73,34 +73,54 @@ export function isCountryIgnored(
   );
 }
 
+export interface CheapScreenOptions {
+  /** Reject when a not-wants term appears. Default true. */
+  checkNotWants?: boolean;
+  /** Reject when wants are set but none appear. Default true. */
+  checkWants?: boolean;
+  /** Reject when profile skills appear neither in the title nor job skills. Default true. */
+  checkSkills?: boolean;
+}
+
 /**
- * Apply the relevancy filter. Returns a decision describing either the
- * positive signals that matched or the list of human-readable reasons the
- * job was filtered out.
+ * Apply the cheap, deterministic screening rules. Each rule can be switched
+ * off independently so the Automation page can tune what runs at poll time.
+ *
+ * Returns a decision describing either the positive signals that matched or
+ * the list of human-readable reasons the job was filtered out.
  */
-export function applyRelevancyFilter(input: RelevancyInput): RelevancyDecision {
+export function applyCheapScreen(
+  input: RelevancyInput,
+  options: CheapScreenOptions = {}
+): RelevancyDecision {
+  const checkNotWants = options.checkNotWants ?? true;
+  const checkWants = options.checkWants ?? true;
+  const checkSkills = options.checkSkills ?? true;
+
   const title = norm(input.jobTitle);
   const description = input.jobDescription.map(norm).join("\n");
   const skills = input.jobSkills.map(norm);
   const jobText = `${title}\n${description}\n${skills.join(" ")}`;
 
   // 1. Not-wants: hard fail.
-  const notWantsHit = input.notWants
-    .map(norm)
-    .filter((n) => n.length > 0)
-    .filter((n) => jobText.includes(n));
-  if (notWantsHit.length > 0) {
-    return {
-      relevant: false,
-      reasons: notWantsHit.map(
-        (n) => `Job matches a "not-wants" filter: "${n}"`
-      ),
-    };
+  if (checkNotWants) {
+    const notWantsHit = input.notWants
+      .map(norm)
+      .filter((n) => n.length > 0)
+      .filter((n) => jobText.includes(n));
+    if (notWantsHit.length > 0) {
+      return {
+        relevant: false,
+        reasons: notWantsHit.map(
+          (n) => `Job matches a "not-wants" filter: "${n}"`
+        ),
+      };
+    }
   }
 
   // 2. Wants: hard fail if at least one must be present and none matched.
   const wants = input.wants.map(norm).filter((n) => n.length > 0);
-  if (wants.length > 0) {
+  if (checkWants && wants.length > 0) {
     const matched = wants.filter((w) => jobText.includes(w));
     if (matched.length === 0) {
       return {
@@ -117,7 +137,7 @@ export function applyRelevancyFilter(input: RelevancyInput): RelevancyDecision {
   const skillsText = `${title} ${skills.join(" ")}`;
   const profileKeywords = input.profileSkills.map(norm).filter((s) => s.length > 0);
   let matchedKeywords: string[] = [];
-  if (profileKeywords.length > 0) {
+  if (checkSkills && profileKeywords.length > 0) {
     matchedKeywords = profileKeywords.filter((k) => skillsText.includes(k));
     if (matchedKeywords.length === 0) {
       return {
@@ -135,4 +155,9 @@ export function applyRelevancyFilter(input: RelevancyInput): RelevancyDecision {
     matchedWants: wants.filter((w) => jobText.includes(w)),
     matchedKeywords,
   };
+}
+
+/** All cheap screening rules on — the behavior used before the toggles existed. */
+export function applyRelevancyFilter(input: RelevancyInput): RelevancyDecision {
+  return applyCheapScreen(input);
 }

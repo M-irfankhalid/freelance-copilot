@@ -133,7 +133,10 @@ function ensureSchema(db: Database.Database): void {
     // Pre-analysis rejection toggles (all default ON, matching historical behavior).
     for (const col of [
       "reject_stale_jobs",
+      "cheap_screening_enabled",
       "reject_ignored_countries",
+      "reject_not_wants",
+      "reject_missing_wants",
       "reject_bad_reputation",
     ] as const) {
       if (!autoColNames.has(col)) {
@@ -360,7 +363,10 @@ function ensureSchema(db: Database.Database): void {
       paused INTEGER NOT NULL DEFAULT 0,
       consecutive_errors INTEGER NOT NULL DEFAULT 0,
       reject_stale_jobs INTEGER NOT NULL DEFAULT 1,
+      cheap_screening_enabled INTEGER NOT NULL DEFAULT 1,
       reject_ignored_countries INTEGER NOT NULL DEFAULT 1,
+      reject_not_wants INTEGER NOT NULL DEFAULT 1,
+      reject_missing_wants INTEGER NOT NULL DEFAULT 1,
       reject_bad_reputation INTEGER NOT NULL DEFAULT 1,
       ai_delivery_timeline INTEGER NOT NULL DEFAULT 0,
       preferred_delivery_days INTEGER NOT NULL DEFAULT 4,

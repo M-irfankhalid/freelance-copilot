@@ -13,7 +13,7 @@ import {
 import { getProfile } from "../profile/profile.service.js";
 import { buildProfileBrief } from "../profile/profile-brief.js";
 import { checkRelevancyWithAI } from "../ai/ai.service.js";
-import { applyRelevancyFilter, isCountryIgnored } from "../ai/relevancy.js";
+import { applyCheapScreen, isCountryIgnored } from "../ai/relevancy.js";
 import {
   getBidAmountBounds,
   getBidAmountSettings,
@@ -469,6 +469,9 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
     );
   }
 
+  // The cheap keyword screen needs the profile's wants/not-wants. A search
+  // without a user (or before a profile is saved) simply skips it.
+  const profile = filters.userId ? getProfile(filters.userId) : null;
   const now = new Date().toISOString();
   const summaries: JobSummary[] = [];
 
@@ -489,23 +492,69 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
 
     const postedLabel = postedLabelFor(project);
     const summary = client.mapToJobSummary(project, postedLabel);
-    // Jobs from ignored countries are excluded by default — stored as a minimal
-    // marker row (status "ignored", no rawData) and never surfaced as analysis
-    // candidates. When the country gate is switched off these jobs are stored
-    // normally and analyzed like any other. The API can report the country
-    // under either `location` or `owner_info`, so check both (each call is a
-    // no-op when the country is missing).
+    // Cheap screening runs on the search payload itself: country, not-wants,
+    // and wants are checked before the project detail is ever fetched. Jobs
+    // that fail are stored as a minimal marker row (status "ignored", no
+    // rawData) and never become analysis candidates. Each check has its own
+    // switch under the cheap-screening master toggle.
+    //
+    // The API can report the country under either `location` or `owner_info`,
+    // so check both (each call is a no-op when the country is missing).
     const countryIgnored =
-      isCountryIgnored(project?.location?.country, filters.ignoredCountries ?? []) ||
-      isCountryIgnored(project?.owner_info?.country, filters.ignoredCountries ?? []);
-    const ignored = gates.rejectIgnoredCountries && countryIgnored;
-    const storedStatus: JobSummary["status"] = ignored ? "ignored" : "new";
+      gates.cheapScreeningEnabled &&
+      gates.rejectIgnoredCountries &&
+      (isCountryIgnored(project?.location?.country, filters.ignoredCountries ?? []) ||
+        isCountryIgnored(project?.owner_info?.country, filters.ignoredCountries ?? []));
 
     const existing = getDb()
       .select()
       .from(jobsTable)
       .where(eq(jobsTable.projectId, project.id))
       .get();
+
+    // Only new rows are keyword-screened: an analyzed job keeps its analysis,
+    // and an ignored job keeps the reason it was already rejected for.
+    const keywordCandidate = existing === undefined || existing.status === "new";
+    let cheapReasons: string[] = [];
+    if (
+      !countryIgnored &&
+      keywordCandidate &&
+      gates.cheapScreeningEnabled &&
+      profile !== null
+    ) {
+      // The full description is usually absent from search results, so use
+      // the preview (or description when present) plus the listed skills.
+      const decision = applyCheapScreen(
+        {
+          jobTitle: project.title ?? "",
+          jobDescription: splitParagraphs(
+            project.description ?? project.preview_description ?? ""
+          ),
+          jobSkills:
+            project.jobs?.map((j) => j.name).filter((n): n is string => Boolean(n)) ?? [],
+          wants: profile.wants,
+          notWants: profile.notWants,
+          profileSkills: profile.skills,
+        },
+        {
+          checkNotWants: gates.rejectNotWants,
+          checkWants: gates.rejectMissingWants,
+          // Skills stay a title/skill check in analysis; at poll time they are
+          // too coarse (the description isn't available) to reject on.
+          checkSkills: false,
+        }
+      );
+      if (!decision.relevant) cheapReasons = decision.reasons;
+    }
+
+    const ignored = countryIgnored || cheapReasons.length > 0;
+    const rejectionReason = countryIgnored
+      ? `Excluded — the client is in ${summary.clientCountry}, a country on your ignore list.`
+      : `Excluded by cheap screening — ${cheapReasons.join("; ")}.`;
+    const ignoredLogReason = countryIgnored
+      ? `client is in ${summary.clientCountry}, a country on your ignore list`
+      : `cheap screening: ${cheapReasons.join("; ")}`;
+    const storedStatus: JobSummary["status"] = ignored ? "ignored" : "new";
 
     if (existing === undefined) {
       if (ignored) {
@@ -526,7 +575,7 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             avgBidLabel: "",
             status: "ignored",
             ignoredAt: now,
-            rejectionReason: `Excluded — the client is in ${summary.clientCountry}, a country on your ignore list.`,
+            rejectionReason,
             importedAt: now,
             updatedAt: now,
           })
@@ -555,8 +604,8 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
       }
       log.info(
         ignored
-          ? `Project ${project.id} (${summary.title}): IGNORED — client is in ${summary.clientCountry}, a country on your ignore list`
-          : `Project ${project.id} (${summary.title}): stored as new — country check passed`
+          ? `Project ${project.id} (${summary.title}): IGNORED — ${ignoredLogReason}`
+          : `Project ${project.id} (${summary.title}): stored as new — cheap screening passed`
       );
       summaries.push({ ...summary, status: storedStatus });
     } else {
@@ -570,13 +619,13 @@ export async function searchJobs(filters: JobSearchFilters = {}): Promise<JobSum
             status: "ignored",
             rawData: null,
             ignoredAt: now,
-            rejectionReason: `Excluded — the client is in ${summary.clientCountry}, a country on your ignore list.`,
+            rejectionReason,
             updatedAt: now,
           })
           .where(eq(jobsTable.projectId, project.id))
           .run();
         log.info(
-          `Project ${project.id} (${summary.title}): IGNORED — client is in ${summary.clientCountry}, a country on your ignore list`
+          `Project ${project.id} (${summary.title}): IGNORED — ${ignoredLogReason}`
         );
       } else {
         // Refresh the live fields, but keep the user's analysis state.
@@ -755,6 +804,25 @@ export async function getJobById(
   const bidAmountSettings = getBidAmountSettings(userId ?? "");
   const timelineSettings = getDeliveryTimelineSettings(userId ?? "");
   const bidAmountBounds = getBidAmountBounds(userId ?? "");
+  const suggestedBidAmount = computeSuggestedBidAmount(
+    refreshed.bidAmount,
+    project,
+    bidAmountSettings,
+    bidAmountBounds
+  );
+
+  // Older analyzed rows stored the placeholder before the recommendation was
+  // computed. Fill it from the same suggestion the bid form uses so the card
+  // shows an amount without forcing a re-analysis.
+  if (
+    storedAnalysis !== null &&
+    (storedAnalysis.recommendedBidLabel === "—" ||
+      storedAnalysis.recommendedBidLabel === "-") &&
+    suggestedBidAmount !== null
+  ) {
+    storedAnalysis.recommendedBidLabel = `$${suggestedBidAmount.toLocaleString("en-US")}`;
+  }
+
   return client.mapToJobDetail(
     project,
     postedLabel,
@@ -769,12 +837,7 @@ export async function getJobById(
         ? refreshed.deliveryDays ?? null
         : null,
       bidAmount: bidAmountSettings.aiBidAmount ? refreshed.bidAmount ?? null : null,
-      suggestedBidAmount: computeSuggestedBidAmount(
-        refreshed.bidAmount,
-        project,
-        bidAmountSettings,
-        bidAmountBounds
-      ),
+      suggestedBidAmount,
       myBid: userId !== undefined ? findMyBid(userId, projectId) : null,
     }
   );
@@ -949,7 +1012,11 @@ export async function analyzeJob(
   // spend AI tokens on a country the user asked to exclude — unless the country
   // gate has been switched off in Automation.
   const country = project.location?.country;
-  if (gates.rejectIgnoredCountries && isCountryIgnored(country, profile.ignoredCountries)) {
+  if (
+    gates.cheapScreeningEnabled &&
+    gates.rejectIgnoredCountries &&
+    isCountryIgnored(country, profile.ignoredCountries)
+  ) {
     const countryLabel = country?.name ?? country?.code ?? "unknown";
     const now = new Date().toISOString();
     getDb()
@@ -1015,25 +1082,35 @@ export async function analyzeJob(
   };
 
   // Step 1: deterministic keyword filter (free) — rejects obvious mismatches
-  // before spending even the cheap relevance model call.
-  const decision = applyRelevancyFilter({
-    jobTitle: project.title ?? "",
-    jobDescription,
-    jobSkills,
-    wants: profile.wants,
-    notWants: profile.notWants,
-    profileSkills: profile.skills,
-  });
-  if (!decision.relevant) {
-    log.info(
-      `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — ${decision.reasons.join("; ")}`
+  // before spending even the cheap relevance model call. Each check follows
+  // its switch on the Automation page; with the master toggle off, the
+  // relevance model (Jev) sees every job.
+  if (gates.cheapScreeningEnabled) {
+    const decision = applyCheapScreen(
+      {
+        jobTitle: project.title ?? "",
+        jobDescription,
+        jobSkills,
+        wants: profile.wants,
+        notWants: profile.notWants,
+        profileSkills: profile.skills,
+      },
+      {
+        checkNotWants: gates.rejectNotWants,
+        checkWants: gates.rejectMissingWants,
+      }
     );
-    return storeIgnored(
-      0,
-      decision.reasons,
-      "This job was filtered out by your profile filters before any AI analysis was run. Update your wants, not-wants, or skills to re-evaluate it.",
-      `Filtered out by your profile filters: ${decision.reasons.join("; ")}`
-    );
+    if (!decision.relevant) {
+      log.info(
+        `Project ${projectId} (${project.title ?? "(untitled project)"}): IGNORED — ${decision.reasons.join("; ")}`
+      );
+      return storeIgnored(
+        0,
+        decision.reasons,
+        "This job was filtered out by your profile filters before any AI analysis was run. Update your wants, not-wants, or skills to re-evaluate it.",
+        `Filtered out by your profile filters: ${decision.reasons.join("; ")}`
+      );
+    }
   }
 
   // Step 2: fast relevance model (Model A). Its score now folds in client
@@ -1103,13 +1180,29 @@ export async function analyzeJob(
 
   const matchedSkills = jobSkills.filter((s) => profile.skills.includes(s));
   const missingSkills = profile.skills.filter((s) => !jobSkills.includes(s));
+
+  // The "Recommended bid" shown on the job page and fed to the proposal prompt
+  // must match the amount the bid form starts from: the gate's pick when AI
+  // selection is on, the default-markup rule otherwise. Without this the card
+  // stayed at the placeholder even after a pick was stored.
+  const suggestedBidAmount = computeSuggestedBidAmount(
+    check.bidAmount,
+    project,
+    bidAmountSettings,
+    getBidAmountBounds(userId)
+  );
+  const recommendedBidLabel =
+    suggestedBidAmount !== null
+      ? `$${suggestedBidAmount.toLocaleString("en-US")}`
+      : "—";
+
   const storedAnalysis: StoredAnalysis = {
     verdict: matchBandForScore(check.score, aiSettings),
     score: check.score,
     summary: check.reason,
     reasons: [check.reason],
     concerns: trustConcerns,
-    recommendedBidLabel: "—",
+    recommendedBidLabel,
     competitorNote: "",
   };
 
@@ -1189,7 +1282,7 @@ export async function analyzeJob(
     missingSkills,
     concerns: storedAnalysis.concerns,
     analysis: check.reason,
-    recommendedBid: "—",
+    recommendedBid: recommendedBidLabel,
   };
 }
 

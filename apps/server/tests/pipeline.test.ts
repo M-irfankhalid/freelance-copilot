@@ -664,6 +664,16 @@ describe("pipeline run", () => {
         .where(eq(userBids.projectId, timelineProject.id))
         .get();
       expect(bidRow?.period).toBe(1);
+
+      // The job page must show the same pick the bid used.
+      const detailRes = await realFetch(`${baseUrl}/api/jobs/${timelineProject.id}`, {
+        headers: authed(),
+      });
+      expect(detailRes.status).toBe(200);
+      const detail = (await detailRes.json()) as {
+        job: { deliveryDays: number | null };
+      };
+      expect(detail.job.deliveryDays).toBe(1);
     } finally {
       // Leave the shared search fixture as the later tests expect it.
       searchResponse.result.projects.pop();
@@ -732,6 +742,23 @@ describe("pipeline run", () => {
         .where(eq(userBids.projectId, bidAmountProject.id))
         .get();
       expect(bidRow?.amount).toBe(600);
+
+      // The job page prefills from the same pick and the suggestion card shows
+      // it too, instead of the old hard-coded placeholder.
+      const detailRes = await realFetch(`${baseUrl}/api/jobs/${bidAmountProject.id}`, {
+        headers: authed(),
+      });
+      expect(detailRes.status).toBe(200);
+      const detail = (await detailRes.json()) as {
+        job: {
+          bidAmount: number | null;
+          suggestedBidAmount: number | null;
+          suggestion: { recommendedBidLabel: string };
+        };
+      };
+      expect(detail.job.bidAmount).toBe(600);
+      expect(detail.job.suggestedBidAmount).toBe(600);
+      expect(detail.job.suggestion.recommendedBidLabel).toBe("$600");
     } finally {
       searchResponse.result.projects.pop();
       await realFetch(`${baseUrl}/api/automation`, {
@@ -805,9 +832,10 @@ describe("pipeline run", () => {
     }
   });
 
-  it("records why a job was rejected by the profile filters, and shows it on the job detail", async () => {
+  it("records why a job was rejected by cheap screening at poll time, and shows it on the job detail", async () => {
     // The profile's notWants includes "crypto"; a project about cryptocurrency
-    // trips the deterministic keyword filter before any AI call is made.
+    // trips the deterministic keyword filter on the search payload, before the
+    // detail fetch or any AI call is made.
     const cryptoProject = {
       ...projectDetail,
       id: PROJECT_ID + 3,
@@ -828,8 +856,8 @@ describe("pipeline run", () => {
       expect(res.status).toBe(200);
       const result = (await res.json()) as { status: string; analyzed: number };
       expect(result.status).toBe("ok");
-      // The one new job is processed and ends up rejected (no successful analysis).
-      expect(result.analyzed).toBe(1);
+      // The job is rejected during polling, so it never reaches analysis.
+      expect(result.analyzed).toBe(0);
 
       // The stored row carries the human-readable reason.
       const { getDb: db } = await import("../src/db/index.js");
@@ -840,7 +868,8 @@ describe("pipeline run", () => {
         .where(eq(jobs.projectId, cryptoProject.id))
         .get();
       expect(row?.status).toBe("ignored");
-      expect(row?.rejectionReason).toContain("Filtered out by your profile filters");
+      expect(row?.rejectionReason).toContain("Excluded by cheap screening");
+      expect(row?.rejectionReason).toContain("not-wants");
 
       // The reason is visible on the job detail endpoint too.
       const detailRes = await realFetch(`${baseUrl}/api/jobs/${cryptoProject.id}`, {
@@ -852,8 +881,59 @@ describe("pipeline run", () => {
         job: { status: string; rejectionReason: string | null };
       };
       expect(job.status).toBe("ignored");
-      expect(job.rejectionReason).toContain("Filtered out by your profile filters");
+      expect(job.rejectionReason).toContain("Excluded by cheap screening");
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lets jobs through when the not-wants switch is off", async () => {
+    // Master cheap screening stays on, but the not-wants rule is disabled, so
+    // the crypto job reaches analysis and the relevance model scores it.
+    await realFetch(`${baseUrl}/api/automation`, {
+      method: "PUT",
+      headers: authed({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ cheapScreeningEnabled: true, rejectNotWants: false }),
+    });
+
+    const cryptoProject = {
+      ...projectDetail,
+      id: PROJECT_ID + 6,
+      title: "Cryptocurrency trading bot",
+      description: "Build a cryptocurrency trading bot with React and Node.js.",
+      preview_description: "Cryptocurrency trading bot.",
+      budget: { minimum: 800, maximum: 4000, project_type: "fixed" },
+      time_submitted: Math.floor(Date.now() / 1000) - 900,
+    };
+    searchResponse.result.projects.push(cryptoProject);
+
+    stubFetch();
+    try {
+      const res = await realFetch(`${baseUrl}/api/automation/run-pipeline`, {
+        method: "POST",
+        headers: authed(),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { status: string; analyzed: number };
+      expect(result.status).toBe("ok");
+      expect(result.analyzed).toBe(1);
+
+      const { getDb: db } = await import("../src/db/index.js");
+      const { jobs } = await import("../src/db/schema.js");
+      const row = db()
+        .select()
+        .from(jobs)
+        .where(eq(jobs.projectId, cryptoProject.id))
+        .get();
+      expect(row?.status).toBe("analyzed");
+      expect(row?.matchScore).toBe(92);
+    } finally {
+      searchResponse.result.projects.pop();
+      await realFetch(`${baseUrl}/api/automation`, {
+        method: "PUT",
+        headers: authed({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ rejectNotWants: true }),
+      });
       vi.unstubAllGlobals();
     }
   });

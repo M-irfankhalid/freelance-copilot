@@ -64,7 +64,10 @@ interface BackendSettings {
   capDate: string | null;
   paused: boolean;
   rejectStaleJobs: boolean;
+  cheapScreeningEnabled: boolean;
   rejectIgnoredCountries: boolean;
+  rejectNotWants: boolean;
+  rejectMissingWants: boolean;
   rejectBadReputation: boolean;
   aiDeliveryTimeline: boolean;
   preferredDeliveryDays: number;
@@ -97,7 +100,10 @@ function normalizeSettings(s: BackendSettings): AutomationSettings {
     bidsToday: s.bidsToday,
     paused: s.paused,
     rejectStaleJobs: s.rejectStaleJobs,
+    cheapScreeningEnabled: s.cheapScreeningEnabled ?? true,
     rejectIgnoredCountries: s.rejectIgnoredCountries,
+    rejectNotWants: s.rejectNotWants ?? true,
+    rejectMissingWants: s.rejectMissingWants ?? true,
     rejectBadReputation: s.rejectBadReputation,
     aiDeliveryTimeline: s.aiDeliveryTimeline,
     preferredDeliveryDays: s.preferredDeliveryDays,
@@ -253,7 +259,10 @@ export default function AutomationPage() {
           maxBid: current.maxBid,
           dailyCap: current.dailyCap,
           rejectStaleJobs: current.rejectStaleJobs,
+          cheapScreeningEnabled: current.cheapScreeningEnabled,
           rejectIgnoredCountries: current.rejectIgnoredCountries,
+          rejectNotWants: current.rejectNotWants,
+          rejectMissingWants: current.rejectMissingWants,
           rejectBadReputation: current.rejectBadReputation,
           aiDeliveryTimeline: current.aiDeliveryTimeline,
           preferredDeliveryDays: current.preferredDeliveryDays,
@@ -837,22 +846,66 @@ export default function AutomationPage() {
           </CardTitle>
           <CardDescription>
             Jobs that fail a rule are rejected before the AI ever sees them — no
-            analysis cost, no storage. Turn a rule off and those jobs move on to
-            normal analysis.
+            analysis cost. Turn a rule off and those jobs move on to normal
+            analysis.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col divide-y">
+          <div className="flex items-center justify-between gap-4 py-3">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="toggle-cheapScreeningEnabled">Cheap screening</Label>
+              <p className="text-xs font-normal text-muted-foreground">
+                Free checks run as soon as jobs are polled, using the search
+                result's title, preview, and skills. No AI call and no job detail
+                fetch. Turn it off to let the relevance model judge every job.
+              </p>
+            </div>
+            <Switch
+              id="toggle-cheapScreeningEnabled"
+              checked={settings.cheapScreeningEnabled}
+              onCheckedChange={(checked) => update("cheapScreeningEnabled", checked)}
+            />
+          </div>
+
+          {(
+            [
+              [
+                "rejectIgnoredCountries",
+                "Reject jobs from excluded countries",
+                "Jobs whose client is in a country on your profile ignore list never reach analysis.",
+              ],
+              [
+                "rejectNotWants",
+                "Reject jobs matching not-wants",
+                "Drops a job when any of your not-wants keywords appears in its title, preview, or skills.",
+              ],
+              [
+                "rejectMissingWants",
+                "Reject jobs missing wanted keywords",
+                "Drops a job when none of your wants keywords appears in its title, preview, or skills.",
+              ],
+            ] as const
+          ).map(([key, label, hint]) => (
+            <div key={key} className="flex items-center justify-between gap-4 py-3">
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor={`toggle-${key}`}>{label}</Label>
+                <p className="text-xs font-normal text-muted-foreground">{hint}</p>
+              </div>
+              <Switch
+                id={`toggle-${key}`}
+                checked={settings[key]}
+                disabled={!settings.cheapScreeningEnabled}
+                onCheckedChange={(checked) => update(key, checked)}
+              />
+            </div>
+          ))}
+
           {(
             [
               [
                 "rejectStaleJobs",
                 "Reject jobs older than 12 hours",
                 "A job posted more than 12 hours ago can no longer be won competitively, so it is dropped before analysis.",
-              ],
-              [
-                "rejectIgnoredCountries",
-                "Reject jobs from excluded countries",
-                "Jobs whose client is in a country on your profile ignore list never reach analysis.",
               ],
               [
                 "rejectBadReputation",

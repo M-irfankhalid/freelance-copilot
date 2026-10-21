@@ -363,8 +363,14 @@ export interface AutomationSettings {
   paused: boolean;
   /** Reject jobs posted more than 12h ago before they are even stored. */
   rejectStaleJobs: boolean;
+  /** Master switch for the free keyword/country screen run at poll time. */
+  cheapScreeningEnabled: boolean;
   /** Reject jobs whose client country is on the profile ignore list. */
   rejectIgnoredCountries: boolean;
+  /** Reject jobs whose text matches a profile not-wants term. */
+  rejectNotWants: boolean;
+  /** Reject jobs that don't mention any profile wants term (when any are set). */
+  rejectMissingWants: boolean;
   /** Reject brand-new, unverified clients (no deposit/upgrades) before analysis. */
   rejectBadReputation: boolean;
   /**

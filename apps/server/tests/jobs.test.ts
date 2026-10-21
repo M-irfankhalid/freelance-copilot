@@ -247,6 +247,15 @@ beforeAll(async () => {
       customInstructions: null,
     }),
   });
+
+  // This file exercises country screening and analysis, not the keyword
+  // screen; keep the fixture jobs (Laravel, no React) from being dropped at
+  // poll time by the wants rule.
+  await fetch(`${baseUrl}/api/automation`, {
+    method: "PUT",
+    headers: authed({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ rejectMissingWants: false, rejectNotWants: false }),
+  });
 });
 
 afterAll(() => {
@@ -396,19 +405,33 @@ describe("jobs", () => {
       analysis: { relevancyScore: number; recommendedBid: string; matchedSkills: string[] };
     };
     expect(body.analysis.relevancyScore).toBe(78);
-    expect(body.analysis.recommendedBid).toBe("—");
+    // AI bid selection is off, so the recommendation is the default-markup
+    // amount rather than the old placeholder.
+    expect(body.analysis.recommendedBid).toMatch(/^\$[\d,]+$/);
     expect(body.analysis.matchedSkills).toEqual(["React.js", "Node.js"]);
 
     // Re-fetching the detail must now surface the stored analysis.
     const detail = await realFetch(`${baseUrl}/api/jobs/100001`, { headers: authed() });
     const detailBody = (await detail.json()) as {
-      job: { status: string; matchScore?: number; suggestion: { score: number; verdict: string; summary: string } };
+      job: {
+        status: string;
+        matchScore?: number;
+        suggestion: {
+          score: number;
+          verdict: string;
+          summary: string;
+          recommendedBidLabel: string;
+        };
+      };
     };
     expect(detailBody.job.status).toBe("analyzed");
     expect(detailBody.job.matchScore).toBe(78);
     expect(detailBody.job.suggestion.score).toBe(78);
     expect(detailBody.job.suggestion.verdict).toBe("good");
     expect(detailBody.job.suggestion.summary).toMatch(/React\/Node\.js/);
+    expect(detailBody.job.suggestion.recommendedBidLabel).toBe(
+      body.analysis.recommendedBid
+    );
   });
 
   it("ignores a job and returns 404 when the project doesn't exist", async () => {

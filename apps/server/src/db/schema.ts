@@ -242,7 +242,11 @@ export const automationSettings = sqliteTable("automation_settings", {
   consecutiveErrors: integer("consecutive_errors").notNull().default(0),
   /** Pre-analysis rejection rules — each can be switched off in Automation. */
   rejectStaleJobs: integer("reject_stale_jobs").notNull().default(1),
+  /** Master switch for the free keyword/country screen run at poll time. */
+  cheapScreeningEnabled: integer("cheap_screening_enabled").notNull().default(1),
   rejectIgnoredCountries: integer("reject_ignored_countries").notNull().default(1),
+  rejectNotWants: integer("reject_not_wants").notNull().default(1),
+  rejectMissingWants: integer("reject_missing_wants").notNull().default(1),
   rejectBadReputation: integer("reject_bad_reputation").notNull().default(1),
   /** Let the relevance gate pick each project's delivery time. */
   aiDeliveryTimeline: integer("ai_delivery_timeline").notNull().default(0),

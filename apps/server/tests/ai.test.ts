@@ -447,7 +447,7 @@ describe("analyzeJob integration", () => {
       analysis: { relevancyScore: number; recommendedBid: string };
     };
     expect(body.analysis.relevancyScore).toBe(72);
-    expect(body.analysis.recommendedBid).toBe("—");
+    expect(body.analysis.recommendedBid).toMatch(/^\$[\d,]+$/);
   });
 
   it("enforces a strict relevance JSON schema and caps gate output tokens", async () => {
