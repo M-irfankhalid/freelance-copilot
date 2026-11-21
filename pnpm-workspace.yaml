@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+allowBuilds:
+  # Native SQLite driver — needs its install script to fetch/build the binding.
+  better-sqlite3: true
+  esbuild: false
+
+# Transitive security patches for the self-hosted server. These stay within
+# the same major versions as the parent dependency ranges.
+overrides:
+  body-parser: ">=2.4.0"
+  qs: ">=6.16.1"
+  hono: ">=4.13.16"
+  "@hono/node-server": ">=2.1.6"

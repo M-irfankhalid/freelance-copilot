@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: freelance-copilot:latest
+    container_name: freelance-copilot
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-4000}:4000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SERVER_PORT: "4000"
+      DATABASE_PATH: /app/apps/server/data/app.db
+      # Same-origin in this setup; set this to your public URL if you put the
+      # container behind a reverse proxy with a different hostname.
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:4000}
+    volumes:
+      # Reuse the data folder from the previous PM2 install. It contains the
+      # SQLite database and MCP tunnel files, and is already git-ignored.
+      - ./apps/server/data:/app/apps/server/data

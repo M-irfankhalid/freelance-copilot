@@ -1,0 +1,692 @@
+[
+  {
+    "name": "Elasticsearch network diagnosis",
+    "data": {
+      "jobTitle": "Diagnose Elasticsearch Network Issue",
+      "clientName": "Client in India",
+      "budgetLabel": "$30 - $250",
+      "jobDescription": [
+        "My Elasticsearch cluster has suddenly started returning blank responses. I've confirmed the indices and mappings are intact, so I'm convinced the fault lies in the current network configuration, even though nothing has been modified recently on my end.",
+        "I need someone who understands routing, firewalls, and the way Elasticsearch nodes communicate over TCP/HTTP to trace the packets and pinpoint the bottleneck. You should be comfortable running curl queries, checking transport and HTTP ports, reviewing DNS or load-balancer rules, and adjusting misconfigured security groups or firewall rules.",
+        "The task ends when queries to the cluster return the expected JSON instead of an empty payload and you can clearly explain the root cause so I can avoid it in the future."
+      ],
+      "skills": ["System Admin", "Linux", "Network Administration", "Elasticsearch", "HTTP", "Firewall"],
+      "bidCount": 37,
+      "avgBid": "$107",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 120,
+      "deliveryDays": 3,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 10, "minBid": 80, "maxBid": 200, "medianBid": 200, "isCheapest": false },
+      "analysis": { "score": 82, "recommendedBidLabel": "$120", "summary": "Strong match on Linux, networking, and Elasticsearch troubleshooting." }
+    }
+  },
+  {
+    "name": "React multi-tenant SaaS MVP",
+    "data": {
+      "jobTitle": "Build a Multi-Tenant SaaS MVP with React and Node",
+      "clientName": "Client in United States",
+      "budgetLabel": "$1,200 - $2,500",
+      "jobDescription": [
+        "We need an MVP for a B2B SaaS product. Users should be able to sign up, create an organization, invite teammates, and manage a simple subscription. The frontend should use React and the backend Node.js with PostgreSQL.",
+        "The MVP must include email/password authentication, role-based access for owners and members, Stripe subscription checkout with a webhook that updates plan status, and an admin view listing organizations and their current plan.",
+        "We have Figma designs for the main screens but no code yet. Please include a short plan for how you would structure the multi-tenant data model, handle Stripe webhooks safely, and deploy the app. We will test with two organizations to confirm data isolation."
+      ],
+      "skills": ["React.js", "Node.js", "PostgreSQL", "Stripe", "API", "Full Stack Development"],
+      "bidCount": 14,
+      "avgBid": "$1,850",
+      "projectType": "fixed",
+      "bidPeriod": 21,
+      "bidAmount": 1800,
+      "deliveryDays": 21,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 8, "minBid": 1200, "maxBid": 2500, "medianBid": 1900, "isCheapest": false },
+      "analysis": { "score": 88, "recommendedBidLabel": "$1,800", "summary": "Strong full-stack fit with React, Node, PostgreSQL, and API integration experience." }
+    }
+  },
+  {
+    "name": "Node.js API performance fix",
+    "data": {
+      "jobTitle": "Fix Slow Node.js API Endpoints and Add Caching",
+      "clientName": "Client in Canada",
+      "budgetLabel": "$25 - $50",
+      "jobDescription": [
+        "Our Express API has become slow under load. The main /orders and /inventory endpoints sometimes take 4-6 seconds, and Redis is already installed but not used by the application.",
+        "We need you to profile the slow routes, find the N+1 database queries, add Redis caching with sensible invalidation, and reduce response time below 500ms for the common cases. You should be comfortable with Node.js, Express, PostgreSQL, Redis, and load testing.",
+        "Please explain how you would measure before/after performance and how you would avoid stale cache data when an order or inventory item changes."
+      ],
+      "skills": ["Node.js", "Express.js", "PostgreSQL", "Redis", "API", "Performance"],
+      "bidCount": 9,
+      "avgBid": "$42/hr",
+      "projectType": "hourly",
+      "bidPeriod": 7,
+      "bidAmount": 40,
+      "deliveryDays": 7,
+      "upgrades": { "featured": false, "urgent": false, "sealed": true },
+      "competition": { "bidCount": 5, "minBid": 30, "maxBid": 50, "medianBid": 42, "isCheapest": false },
+      "analysis": { "score": 84, "recommendedBidLabel": "$40/hr", "summary": "Good match on Node.js, PostgreSQL, Redis, and API performance work." }
+    }
+  },
+  {
+    "name": "WordPress host migration",
+    "data": {
+      "jobTitle": "Move WordPress Site to New Host Without Downtime",
+      "clientName": "Client in United Kingdom",
+      "budgetLabel": "$200 - $400",
+      "jobDescription": [
+        "We are moving a small business WordPress site from Bluehost to Hostinger. The site has about 40 pages, a blog, and business email through the current host.",
+        "I need the files and database migrated, DNS and SSL configured, business email working, and a test on the new host before switching. The current URLs must stay the same.",
+        "The task ends when the new site loads correctly, email sends and receives, and I can log in to WordPress admin."
+      ],
+      "skills": ["WordPress", "Migration", "DNS", "SSL", "Email"],
+      "bidCount": 11,
+      "avgBid": "$280",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 300,
+      "deliveryDays": 5,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 7, "minBid": 180, "maxBid": 500, "medianBid": 300, "isCheapest": false },
+      "analysis": { "score": 90, "recommendedBidLabel": "$300", "summary": "Direct match on WordPress migration, DNS, and email." }
+    }
+  },
+  {
+    "name": "Shopify store setup",
+    "data": {
+      "jobTitle": "Set Up a Shopify Store for a Clothing Brand",
+      "clientName": "Client in Australia",
+      "budgetLabel": "$500 - $900",
+      "jobDescription": [
+        "We have a Shopify account but no store yet. We need a clean storefront for about 30 clothing products, with collections, product variants, shipping rates, and tax settings.",
+        "The design should feel classic and simple. We have product photos and a logo, but no theme selected. Payments should use Shopify Payments and PayPal.",
+        "Please propose the setup and tell us what you need from us before starting."
+      ],
+      "skills": ["Shopify", "E-commerce", "Product Setup", "Payment Gateway"],
+      "bidCount": 18,
+      "avgBid": "$720",
+      "projectType": "fixed",
+      "bidPeriod": 14,
+      "bidAmount": 750,
+      "deliveryDays": 10,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 12, "minBid": 500, "maxBid": 1500, "medianBid": 800, "isCheapest": false },
+      "analysis": { "score": 86, "recommendedBidLabel": "$750", "summary": "Strong e-commerce fit with Shopify and payment setup." }
+    }
+  },
+  {
+    "name": "WooCommerce checkout bug",
+    "data": {
+      "jobTitle": "WooCommerce Checkout Fails on Mobile",
+      "clientName": "Client in Germany",
+      "budgetLabel": "$100 - $250",
+      "jobDescription": [
+        "Customers on mobile cannot complete checkout. The Place Order button spins forever after they enter card details, but desktop checkout usually works.",
+        "We use WordPress, WooCommerce, Stripe, and a caching plugin. The problem started after a plugin update last week. We need the cause found and fixed without breaking other payment methods.",
+        "Please tell us how you would reproduce and test the fix."
+      ],
+      "skills": ["WooCommerce", "WordPress", "Stripe", "Debugging", "PHP"],
+      "bidCount": 21,
+      "avgBid": "$170",
+      "projectType": "fixed",
+      "bidPeriod": 5,
+      "bidAmount": 180,
+      "deliveryDays": 3,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 13, "minBid": 80, "maxBid": 300, "medianBid": 180, "isCheapest": false },
+      "analysis": { "score": 85, "recommendedBidLabel": "$180", "summary": "Good WooCommerce and payment debugging fit." }
+    }
+  },
+  {
+    "name": "Laravel version upgrade",
+    "data": {
+      "jobTitle": "Upgrade Laravel 8 App to Laravel 11",
+      "clientName": "Client in Netherlands",
+      "budgetLabel": "$800 - $1,500",
+      "jobDescription": [
+        "We have a Laravel 8 application with 60 tests. We need it upgraded to Laravel 11, including dependencies, deprecated APIs, and PHP version changes.",
+        "The app uses MySQL, queues, and a small Vue frontend. All existing tests must pass, and the deployment process should stay the same.",
+        "We need a short plan with the risky parts and how you would verify the upgrade."
+      ],
+      "skills": ["Laravel", "PHP", "MySQL", "Vue.js", "Testing"],
+      "bidCount": 7,
+      "avgBid": "$1,200",
+      "projectType": "fixed",
+      "bidPeriod": 21,
+      "bidAmount": 1200,
+      "deliveryDays": 14,
+      "upgrades": { "featured": false, "urgent": false, "sealed": true },
+      "competition": { "bidCount": 4, "minBid": 800, "maxBid": 2000, "medianBid": 1250, "isCheapest": false },
+      "analysis": { "score": 83, "recommendedBidLabel": "$1,200", "summary": "Relevant Laravel and PHP upgrade experience." }
+    }
+  },
+  {
+    "name": "Python scraper with cleanup",
+    "data": {
+      "jobTitle": "Build a Python Scraper for Supplier Prices",
+      "clientName": "Client in United States",
+      "budgetLabel": "$300 - $600",
+      "jobDescription": [
+        "We need a Python script that collects product prices from five supplier websites once a day and writes them to a CSV and a PostgreSQL table.",
+        "Some sites load data with JavaScript. The script should handle retries, rate limits, missing fields, and simple changes in page structure.",
+        "We would also like a short README that explains how to run it and where to change the selectors."
+      ],
+      "skills": ["Python", "Web Scraping", "PostgreSQL", "Data Processing"],
+      "bidCount": 16,
+      "avgBid": "$450",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 475,
+      "deliveryDays": 7,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 9, "minBid": 250, "maxBid": 800, "medianBid": 450, "isCheapest": false },
+      "analysis": { "score": 80, "recommendedBidLabel": "$475", "summary": "Relevant Python and data extraction work." }
+    }
+  },
+  {
+    "name": "React Native app bug fix",
+    "data": {
+      "jobTitle": "Fix Push Notifications in a React Native App",
+      "clientName": "Client in Sweden",
+      "budgetLabel": "$150 - $300",
+      "jobDescription": [
+        "Our React Native app receives push notifications on Android but not on iOS. The backend sends through Firebase Cloud Messaging, and the iOS build has the required certificates.",
+        "We need someone to inspect the app configuration, test on a real iOS device, and fix the notification handling. Please do not rewrite the app.",
+        "The task ends when a test notification arrives on both platforms and the setup is documented."
+      ],
+      "skills": ["React Native", "iOS", "Firebase", "Push Notifications", "Debugging"],
+      "bidCount": 13,
+      "avgBid": "$220",
+      "projectType": "fixed",
+      "bidPeriod": 5,
+      "bidAmount": 240,
+      "deliveryDays": 4,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 8, "minBid": 100, "maxBid": 400, "medianBid": 220, "isCheapest": false },
+      "analysis": { "score": 79, "recommendedBidLabel": "$240", "summary": "Relevant mobile debugging work." }
+    }
+  },
+  {
+    "name": "Django booking system",
+    "data": {
+      "jobTitle": "Build a Django Booking System for a Small Hotel",
+      "clientName": "Client in Spain",
+      "budgetLabel": "$1,500 - $3,000",
+      "jobDescription": [
+        "We need a simple booking system for a 12-room hotel. Guests should see availability, request a room, and receive a confirmation email. Staff need an admin view to manage bookings and blocked dates.",
+        "The site should use Django and PostgreSQL. Payments are handled offline for now. The design can follow our existing logo and colors.",
+        "Please include how you would prevent double bookings and how you would test the availability logic."
+      ],
+      "skills": ["Django", "Python", "PostgreSQL", "HTML", "CSS"],
+      "bidCount": 6,
+      "avgBid": "$2,200",
+      "projectType": "fixed",
+      "bidPeriod": 30,
+      "bidAmount": 2200,
+      "deliveryDays": 25,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 3, "minBid": 1500, "maxBid": 3500, "medianBid": 2400, "isCheapest": false },
+      "analysis": { "score": 81, "recommendedBidLabel": "$2,200", "summary": "Relevant Django and booking logic." }
+    }
+  },
+  {
+    "name": "Squarespace to WordPress move",
+    "data": {
+      "jobTitle": "Rebuild a Squarespace Site in WordPress",
+      "clientName": "Client in Ireland",
+      "budgetLabel": "$700 - $1,200",
+      "jobDescription": [
+        "Our studio site is on Squarespace but we want to move to WordPress so we can manage a blog and case studies ourselves.",
+        "There are about 15 pages, 20 blog posts, and a contact form. We want the same visual feel, not a new brand. The site should be responsive and fast on mobile.",
+        "We already have hosting and a domain. Please tell us what you need from us and how you would handle the content move."
+      ],
+      "skills": ["WordPress", "Web Design", "Migration", "Responsive Design"],
+      "bidCount": 12,
+      "avgBid": "$950",
+      "projectType": "fixed",
+      "bidPeriod": 14,
+      "bidAmount": 900,
+      "deliveryDays": 12,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 7, "minBid": 600, "maxBid": 1500, "medianBid": 950, "isCheapest": false },
+      "analysis": { "score": 85, "recommendedBidLabel": "$900", "summary": "Strong WordPress and migration fit." }
+    }
+  },
+  {
+    "name": "Google Ads landing page",
+    "data": {
+      "jobTitle": "Build a Fast Landing Page for Google Ads",
+      "clientName": "Client in United States",
+      "budgetLabel": "$250 - $500",
+      "jobDescription": [
+        "We need a single landing page for a dental clinic campaign. It should load fast on mobile, show the services, and make it easy to call or book.",
+        "We have copy, photos, and a logo. The page should be built in WordPress or plain HTML, whichever gives better performance.",
+        "Please include how you would measure speed and conversion tracking."
+      ],
+      "skills": ["Landing Page", "HTML", "CSS", "WordPress", "Performance"],
+      "bidCount": 24,
+      "avgBid": "$380",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 400,
+      "deliveryDays": 5,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 15, "minBid": 200, "maxBid": 700, "medianBid": 400, "isCheapest": false },
+      "analysis": { "score": 82, "recommendedBidLabel": "$400", "summary": "Relevant landing page and performance work." }
+    }
+  },
+  {
+    "name": "WCAG accessibility audit",
+    "data": {
+      "jobTitle": "Accessibility Audit for a Public Sector Website",
+      "clientName": "Client in Norway",
+      "budgetLabel": "$600 - $1,000",
+      "jobDescription": [
+        "We need a WCAG 2.2 AA audit of a 20-page public website. The report should list issues by severity, include screen-reader and keyboard findings, and give practical fixes for our developers.",
+        "We do not need the fixes implemented in this project. We need a clear report and a short walkthrough meeting.",
+        "Please include the tools and manual checks you use and how you avoid false positives."
+      ],
+      "skills": ["Accessibility", "WCAG", "HTML", "CSS", "Testing"],
+      "bidCount": 5,
+      "avgBid": "$800",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 800,
+      "deliveryDays": 8,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 2, "minBid": 600, "maxBid": 1200, "medianBid": 850, "isCheapest": false },
+      "analysis": { "score": 78, "recommendedBidLabel": "$800", "summary": "Relevant audit and accessibility work." }
+    }
+  },
+  {
+    "name": "Core Web Vitals optimization",
+    "data": {
+      "jobTitle": "Improve Core Web Vitals on a WordPress Site",
+      "clientName": "Client in United Kingdom",
+      "budgetLabel": "$250 - $500",
+      "jobDescription": [
+        "Our WordPress site scores poorly on mobile PageSpeed. LCP is above 4 seconds and CLS is high on product pages.",
+        "We need a diagnosis of the main causes, image and font optimization, and fixes for layout shift. We already use a caching plugin, but we are open to changing it.",
+        "The task ends when mobile scores are clearly better and nothing breaks visually."
+      ],
+      "skills": ["WordPress", "Performance", "Core Web Vitals", "CSS", "JavaScript"],
+      "bidCount": 17,
+      "avgBid": "$360",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 380,
+      "deliveryDays": 5,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 10, "minBid": 200, "maxBid": 600, "medianBid": 350, "isCheapest": false },
+      "analysis": { "score": 84, "recommendedBidLabel": "$380", "summary": "Good WordPress performance fit." }
+    }
+  },
+  {
+    "name": "Stripe webhook reliability",
+    "data": {
+      "jobTitle": "Make Stripe Webhooks Reliable in a Node App",
+      "clientName": "Client in United States",
+      "budgetLabel": "$300 - $600",
+      "jobDescription": [
+        "Our Node.js app occasionally misses Stripe subscription events. Some customers stay on an old plan after upgrading, and we have seen duplicate events.",
+        "We need idempotent webhook handling, signature verification, retries, and a way to replay failed events. The app uses Express, PostgreSQL, and Stripe.",
+        "Please explain how you would test this without creating real charges."
+      ],
+      "skills": ["Node.js", "Stripe", "Webhooks", "PostgreSQL", "API"],
+      "bidCount": 10,
+      "avgBid": "$480",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 500,
+      "deliveryDays": 6,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 6, "minBid": 300, "maxBid": 800, "medianBid": 500, "isCheapest": false },
+      "analysis": { "score": 86, "recommendedBidLabel": "$500", "summary": "Relevant Stripe and Node.js work." }
+    }
+  },
+  {
+    "name": "HubSpot CRM integration",
+    "data": {
+      "jobTitle": "Sync Website Leads into HubSpot",
+      "clientName": "Client in Canada",
+      "budgetLabel": "$400 - $800",
+      "jobDescription": [
+        "Our website contact forms save leads in a custom database. We want new leads sent to HubSpot with the right fields, source, and owner.",
+        "The integration should handle duplicates, retries, and HubSpot API rate limits. We also want a small admin page showing the last sync status.",
+        "We use a Node.js backend and PostgreSQL."
+      ],
+      "skills": ["Node.js", "HubSpot", "API", "PostgreSQL", "Integration"],
+      "bidCount": 8,
+      "avgBid": "$620",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 650,
+      "deliveryDays": 8,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 5, "minBid": 400, "maxBid": 1000, "medianBid": 650, "isCheapest": false },
+      "analysis": { "score": 81, "recommendedBidLabel": "$650", "summary": "Relevant API integration work." }
+    }
+  },
+  {
+    "name": "OpenAI support chatbot",
+    "data": {
+      "jobTitle": "Add an AI Support Chatbot to Our Docs",
+      "clientName": "Client in United States",
+      "budgetLabel": "$800 - $1,500",
+      "jobDescription": [
+        "We want a chatbot that answers questions using our existing documentation. It should cite the source page and say when it does not know.",
+        "The app uses Next.js. We need a small backend that indexes the docs, retrieves relevant sections, and calls an LLM. We want basic rate limits and logging.",
+        "Please explain how you would prevent made-up answers and how you would evaluate quality."
+      ],
+      "skills": ["OpenAI", "Next.js", "RAG", "Node.js", "API"],
+      "bidCount": 19,
+      "avgBid": "$1,100",
+      "projectType": "fixed",
+      "bidPeriod": 21,
+      "bidAmount": 1100,
+      "deliveryDays": 14,
+      "upgrades": { "featured": true, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 11, "minBid": 700, "maxBid": 2000, "medianBid": 1200, "isCheapest": false },
+      "analysis": { "score": 80, "recommendedBidLabel": "$1,100", "summary": "Relevant AI and Next.js work." }
+    }
+  },
+  {
+    "name": "Excel reporting automation",
+    "data": {
+      "jobTitle": "Automate a Monthly Excel Report",
+      "clientName": "Client in South Africa",
+      "budgetLabel": "$150 - $300",
+      "jobDescription": [
+        "Every month I combine three CSV exports in Excel, clean the data, and build the same summary tables. It takes several hours and I make mistakes.",
+        "I need a script that does the cleanup and produces the final Excel file with the same layout. I do not need a web app.",
+        "Please ask for the sample files if you need them before quoting."
+      ],
+      "skills": ["Excel", "Python", "Data Processing", "Automation"],
+      "bidCount": 14,
+      "avgBid": "$220",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 240,
+      "deliveryDays": 4,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 8, "minBid": 120, "maxBid": 400, "medianBid": 220, "isCheapest": false },
+      "analysis": { "score": 76, "recommendedBidLabel": "$240", "summary": "Relevant automation work." }
+    }
+  },
+  {
+    "name": "Sales dashboard from API",
+    "data": {
+      "jobTitle": "Build a Sales Dashboard from Our API",
+      "clientName": "Client in United States",
+      "budgetLabel": "$900 - $1,800",
+      "jobDescription": [
+        "We need an internal dashboard showing monthly sales, top products, and regional performance. The data is available through our REST API.",
+        "The dashboard should use React and support date filters, CSV export, and a simple permissions check for managers.",
+        "We have no design yet. Please propose the main screens and how you would handle slow API responses."
+      ],
+      "skills": ["React.js", "API", "Data Visualization", "PostgreSQL", "TypeScript"],
+      "bidCount": 9,
+      "avgBid": "$1,400",
+      "projectType": "fixed",
+      "bidPeriod": 21,
+      "bidAmount": 1400,
+      "deliveryDays": 15,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 5, "minBid": 900, "maxBid": 2200, "medianBid": 1500, "isCheapest": false },
+      "analysis": { "score": 87, "recommendedBidLabel": "$1,400", "summary": "Strong React dashboard fit." }
+    }
+  },
+  {
+    "name": "Email deliverability repair",
+    "data": {
+      "jobTitle": "Fix Email Deliverability for a Small Business",
+      "clientName": "Client in United Arab Emirates",
+      "budgetLabel": "$200 - $400",
+      "jobDescription": [
+        "Our invoices and contact-form emails often land in spam. We use Google Workspace for staff and a shared host for the website.",
+        "We need SPF, DKIM, and DMARC checked and fixed, the sending domain verified, and a test showing delivery to Gmail and Outlook.",
+        "Please explain what you need access to and what you will not change."
+      ],
+      "skills": ["Email", "DNS", "SPF", "DKIM", "DMARC"],
+      "bidCount": 7,
+      "avgBid": "$300",
+      "projectType": "fixed",
+      "bidPeriod": 5,
+      "bidAmount": 320,
+      "deliveryDays": 3,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 4, "minBid": 200, "maxBid": 500, "medianBid": 300, "isCheapest": false },
+      "analysis": { "score": 79, "recommendedBidLabel": "$320", "summary": "Relevant DNS and email work." }
+    }
+  },
+  {
+    "name": "Server security hardening",
+    "data": {
+      "jobTitle": "Harden a Linux Server After Suspicious Logins",
+      "clientName": "Client in Singapore",
+      "budgetLabel": "$300 - $600",
+      "jobDescription": [
+        "We saw repeated failed SSH logins on a small Ubuntu server that runs a Node.js app and PostgreSQL. Nothing appears to be breached, but we want it hardened.",
+        "Please review SSH, firewall rules, updates, user accounts, and database exposure. Add fail2ban or an equivalent, and document the changes.",
+        "Do not change the app code unless it is required to close a security issue."
+      ],
+      "skills": ["Linux", "Security", "SSH", "Firewall", "Ubuntu"],
+      "bidCount": 6,
+      "avgBid": "$450",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 450,
+      "deliveryDays": 5,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 3, "minBid": 300, "maxBid": 800, "medianBid": 450, "isCheapest": false },
+      "analysis": { "score": 82, "recommendedBidLabel": "$450", "summary": "Relevant Linux security work." }
+    }
+  },
+  {
+    "name": "AWS bill reduction",
+    "data": {
+      "jobTitle": "Review and Reduce Our AWS Bill",
+      "clientName": "Client in United States",
+      "budgetLabel": "$400 - $800",
+      "jobDescription": [
+        "Our AWS bill grew from $600 to $1,800 per month. We run EC2, RDS, S3, and CloudFront for a small SaaS app.",
+        "We need a review of the bill, the biggest cost drivers, and a safe list of changes with estimated savings. Do not make changes without approval.",
+        "Please include how you would avoid breaking production."
+      ],
+      "skills": ["AWS", "Cloud", "Cost Optimization", "DevOps"],
+      "bidCount": 8,
+      "avgBid": "$650",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 650,
+      "deliveryDays": 7,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 5, "minBid": 400, "maxBid": 1200, "medianBid": 650, "isCheapest": false },
+      "analysis": { "score": 77, "recommendedBidLabel": "$650", "summary": "Relevant AWS review work." }
+    }
+  },
+  {
+    "name": "Docker deployment cleanup",
+    "data": {
+      "jobTitle": "Clean Up Docker Deployment for a Node App",
+      "clientName": "Client in Denmark",
+      "budgetLabel": "$300 - $600",
+      "jobDescription": [
+        "Our Node.js app runs in Docker on a single VPS, but deployments are manual and the image is large. Logs are hard to find and restarts are not reliable.",
+        "We need a smaller multi-stage image, a compose setup for the app and PostgreSQL, health checks, and a short deployment runbook.",
+        "Please do not move us to Kubernetes."
+      ],
+      "skills": ["Docker", "Node.js", "PostgreSQL", "DevOps", "Linux"],
+      "bidCount": 11,
+      "avgBid": "$480",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 500,
+      "deliveryDays": 6,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 7, "minBid": 300, "maxBid": 800, "medianBid": 500, "isCheapest": false },
+      "analysis": { "score": 83, "recommendedBidLabel": "$500", "summary": "Relevant Docker and Node.js work." }
+    }
+  },
+  {
+    "name": "CI pipeline for monorepo",
+    "data": {
+      "jobTitle": "Set Up CI for a TypeScript Monorepo",
+      "clientName": "Client in Germany",
+      "budgetLabel": "$500 - $900",
+      "jobDescription": [
+        "We have a pnpm monorepo with a Next.js app, a Node API, and shared packages. There is no CI yet.",
+        "We need GitHub Actions that run typecheck, lint, tests, and build only the affected packages. A pull request should fail clearly when something breaks.",
+        "Please include caching and how you would keep the workflow fast."
+      ],
+      "skills": ["GitHub Actions", "TypeScript", "CI/CD", "pnpm", "Node.js"],
+      "bidCount": 7,
+      "avgBid": "$700",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 700,
+      "deliveryDays": 7,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 4, "minBid": 500, "maxBid": 1200, "medianBid": 750, "isCheapest": false },
+      "analysis": { "score": 84, "recommendedBidLabel": "$700", "summary": "Relevant CI and TypeScript work." }
+    }
+  },
+  {
+    "name": "API documentation rewrite",
+    "data": {
+      "jobTitle": "Rewrite Our API Documentation",
+      "clientName": "Client in United States",
+      "budgetLabel": "$400 - $700",
+      "jobDescription": [
+        "Our REST API docs are out of date. Endpoints are missing, request examples are wrong, and authentication is explained in three different ways.",
+        "We need the OpenAPI spec checked, the docs rewritten for developers, and a clear getting-started guide with working curl examples.",
+        "We can give you a staging key and access to the repository."
+      ],
+      "skills": ["Technical Writing", "API", "OpenAPI", "Documentation"],
+      "bidCount": 9,
+      "avgBid": "$550",
+      "projectType": "fixed",
+      "bidPeriod": 10,
+      "bidAmount": 550,
+      "deliveryDays": 8,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 6, "minBid": 400, "maxBid": 1000, "medianBid": 600, "isCheapest": false },
+      "analysis": { "score": 75, "recommendedBidLabel": "$550", "summary": "Relevant documentation work." }
+    }
+  },
+  {
+    "name": "Legacy PHP rescue",
+    "data": {
+      "jobTitle": "Fix a Legacy PHP Site That Breaks on Save",
+      "clientName": "Client in Italy",
+      "budgetLabel": "$200 - $450",
+      "jobDescription": [
+        "An old PHP site throws a 500 error when staff save a news article. It uses MySQL and a custom admin panel from around 2014.",
+        "We cannot upgrade the whole site right now. We need the immediate bug found and fixed, plus a short note on what is fragile.",
+        "Please tell us what access you need and how you would avoid making it worse."
+      ],
+      "skills": ["PHP", "MySQL", "Debugging", "Legacy Code"],
+      "bidCount": 18,
+      "avgBid": "$300",
+      "projectType": "fixed",
+      "bidPeriod": 5,
+      "bidAmount": 300,
+      "deliveryDays": 3,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 11, "minBid": 150, "maxBid": 600, "medianBid": 300, "isCheapest": false },
+      "analysis": { "score": 78, "recommendedBidLabel": "$300", "summary": "Relevant PHP debugging work." }
+    }
+  },
+  {
+    "name": "Multilingual WordPress site",
+    "data": {
+      "jobTitle": "Add French and Spanish to a WordPress Site",
+      "clientName": "Client in France",
+      "budgetLabel": "$500 - $900",
+      "jobDescription": [
+        "We have a WordPress site in English and need French and Spanish versions. The site has 12 pages and a blog.",
+        "We want language-specific URLs, a language switcher, translated menus, and SEO metadata. Staff will provide the translations.",
+        "Please recommend a plugin approach and explain how you would avoid duplicate content issues."
+      ],
+      "skills": ["WordPress", "Multilingual", "SEO", "PHP"],
+      "bidCount": 10,
+      "avgBid": "$700",
+      "projectType": "fixed",
+      "bidPeriod": 14,
+      "bidAmount": 700,
+      "deliveryDays": 10,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 6, "minBid": 500, "maxBid": 1200, "medianBid": 750, "isCheapest": false },
+      "analysis": { "score": 80, "recommendedBidLabel": "$700", "summary": "Relevant WordPress and multilingual work." }
+    }
+  },
+  {
+    "name": "Newsletter template build",
+    "data": {
+      "jobTitle": "Build a Responsive Email Newsletter Template",
+      "clientName": "Client in Australia",
+      "budgetLabel": "$200 - $400",
+      "jobDescription": [
+        "We send a monthly newsletter through Mailchimp. The current template breaks in Outlook and looks cramped on mobile.",
+        "We need a responsive template with our logo, colors, a header, article blocks, and a footer. It must work in Gmail, Outlook, and Apple Mail.",
+        "We can provide the brand assets and a sample newsletter."
+      ],
+      "skills": ["HTML Email", "CSS", "Mailchimp", "Responsive Design"],
+      "bidCount": 12,
+      "avgBid": "$300",
+      "projectType": "fixed",
+      "bidPeriod": 7,
+      "bidAmount": 300,
+      "deliveryDays": 4,
+      "upgrades": { "featured": false, "urgent": false, "sealed": false },
+      "competition": { "bidCount": 7, "minBid": 180, "maxBid": 500, "medianBid": 300, "isCheapest": false },
+      "analysis": { "score": 74, "recommendedBidLabel": "$300", "summary": "Relevant email template work." }
+    }
+  },
+  {
+    "name": "Database migration with zero downtime",
+    "data": {
+      "jobTitle": "Move PostgreSQL to a Managed Database Without Downtime",
+      "clientName": "Client in United States",
+      "budgetLabel": "$600 - $1,200",
+      "jobDescription": [
+        "We need to move a 40GB PostgreSQL database from a self-managed server to a managed provider with minimal downtime.",
+        "The app is a Node.js API with background jobs. We need a replication plan, a cutover checklist, and a rollback path.",
+        "Please explain how you would keep writes consistent during the switch."
+      ],
+      "skills": ["PostgreSQL", "Database Migration", "Node.js", "DevOps"],
+      "bidCount": 5,
+      "avgBid": "$950",
+      "projectType": "fixed",
+      "bidPeriod": 14,
+      "bidAmount": 950,
+      "deliveryDays": 10,
+      "upgrades": { "featured": false, "urgent": false, "sealed": true },
+      "competition": { "bidCount": 3, "minBid": 600, "maxBid": 1500, "medianBid": 950, "isCheapest": false },
+      "analysis": { "score": 85, "recommendedBidLabel": "$950", "summary": "Relevant PostgreSQL migration work." }
+    }
+  },
+  {
+    "name": "Emergency site down",
+    "data": {
+      "jobTitle": "Website Is Down - Need Help Now",
+      "clientName": "Client in United States",
+      "budgetLabel": "$50 - $150",
+      "jobDescription": [
+        "Our WordPress site suddenly shows a database connection error. We have not changed anything, and our host says the server is online.",
+        "We need someone to check it now and restore the site. We have backups but do not know which one is safe to use.",
+        "Please respond with what you would check first."
+      ],
+      "skills": ["WordPress", "MySQL", "Emergency", "Debugging"],
+      "bidCount": 31,
+      "avgBid": "$90",
+      "projectType": "fixed",
+      "bidPeriod": 2,
+      "bidAmount": 100,
+      "deliveryDays": 1,
+      "upgrades": { "featured": false, "urgent": true, "sealed": false },
+      "competition": { "bidCount": 20, "minBid": 50, "maxBid": 300, "medianBid": 100, "isCheapest": false },
+      "analysis": { "score": 79, "recommendedBidLabel": "$100", "summary": "Urgent WordPress recovery work." }
+    }
+  }
+]

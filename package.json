@@ -1,0 +1,31 @@
+{
+  "name": "freelance-copilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted AI agent that discovers matching Freelancer.com projects and drafts proposals you can review before bidding.",
+  "license": "MIT",
+  "author": "Muhammad Irfan Khalid",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M-irfankhalid/freelance-copilot.git"
+  },
+  "homepage": "https://github.com/M-irfankhalid/freelance-copilot#readme",
+  "bugs": {
+    "url": "https://github.com/M-irfankhalid/freelance-copilot/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter web dev\" \"pnpm --filter server dev\"",
+    "build": "pnpm --filter web build && pnpm --filter server build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

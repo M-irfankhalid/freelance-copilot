@@ -1,0 +1,23 @@
+# Keep the build context small and never copy local secrets, databases, or
+# build output into the image.
+node_modules
+**/node_modules
+dist
+**/dist
+.env
+.env.*
+!.env.example
+/apps/server/data
+/apps/server/data/**
+/data
+/logs
+.git
+.gitignore
+.vscode
+.idea
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3

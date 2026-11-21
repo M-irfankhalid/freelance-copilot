@@ -1,0 +1,559 @@
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+
+import Database from "better-sqlite3";
+import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+
+import { env } from "../env.js";
+import * as schema from "./schema.js";
+
+type Db = BetterSQLite3Database<typeof schema>;
+
+let client: Database.Database | null = null;
+
+/**
+ * Lazy singleton database connection. The path comes from DATABASE_PATH so
+ * tests can use ":memory:" and production uses ./data/app.db (git-ignored).
+ */
+export function getDb(): Db {
+  if (client === null) {
+    const path =
+      env.DATABASE_PATH === ":memory:" ? ":memory:" : resolve(env.DATABASE_PATH);
+    if (path !== ":memory:") {
+      mkdirSync(dirname(path), { recursive: true });
+    }
+    client = new Database(path);
+    client.pragma("journal_mode = WAL");
+    ensureSchema(client);
+  }
+  return drizzle(client, { schema });
+}
+
+/** Close cleanly on shutdown or between tests. */
+export function closeDb(): void {
+  client?.close();
+  client = null;
+}
+
+/**
+ * Idempotent bootstrap of the current schema. Drizzle-kit manages the schema
+ * definition; this keeps an existing database usable with zero manual steps.
+ */
+function ensureSchema(db: Database.Database): void {
+  // `jobs.project_id` is stored as INTEGER. Early builds used TEXT, so drop
+  // the table when an older database still has the wrong column type. The
+  // table is a local-only cache of public Freelancer data — nothing to lose.
+  const jobCols = db
+    .prepare("PRAGMA table_info(jobs)")
+    .all() as Array<{ name: string; type: string }>;
+  if (jobCols.length > 0) {
+    const pidType = jobCols.find((c) => c.name === "project_id")?.type ?? "";
+    if (pidType.toUpperCase() !== "INTEGER") {
+      db.exec("DROP TABLE jobs");
+    }
+  }
+
+  // Backfill any missing columns on user_profile. We use ALTER TABLE ADD COLUMN
+  // (not DROP) for active data because this table holds user-entered values.
+  const profileCols = db
+    .prepare("PRAGMA table_info(user_profile)")
+    .all() as Array<{ name: string }>;
+  if (profileCols.length > 0) {
+    const profileColNames = new Set(profileCols.map((c) => c.name));
+    for (const col of [
+      "user_summary",
+      "skill_ids",
+      "ignored_countries",
+      "relevancy_instructions",
+        "portfolio_summary",
+        "proposal_templates",
+        "proposal_system_instructions",
+        "proposal_writing_instructions",
+      ] as const) {
+      if (!profileColNames.has(col)) {
+        db.exec(`ALTER TABLE user_profile ADD COLUMN ${col} TEXT`);
+      }
+    }
+    // Structured experience, portfolio, and certifications are no longer part
+    // of the profile. Portfolio details live in portfolio_summary instead.
+    for (const col of ["experience", "portfolio", "certifications"] as const) {
+      if (profileColNames.has(col)) {
+        db.exec(`ALTER TABLE user_profile DROP COLUMN ${col}`);
+      }
+    }
+  }
+
+  // Backfill raw_data column on jobs (non-breaking addition for existing DBs).
+  const jobsCols = db
+    .prepare("PRAGMA table_info(jobs)")
+    .all() as Array<{ name: string }>;
+  if (jobsCols.length > 0) {
+    const jobsColNames = new Set(jobsCols.map((c) => c.name));
+    if (!jobsColNames.has("raw_data")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN raw_data TEXT");
+    }
+    if (!jobsColNames.has("client_quality")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN client_quality TEXT");
+    }
+    if (!jobsColNames.has("rejection_reason")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN rejection_reason TEXT");
+    }
+    if (!jobsColNames.has("auto_bid_failed_at")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN auto_bid_failed_at TEXT");
+    }
+    if (!jobsColNames.has("auto_bid_error")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN auto_bid_error TEXT");
+    }
+    // Delivery time the relevance gate picked for this project. Nullable: rows
+    // analyzed before the feature (or with AI timeline selection off) keep no
+    // value and auto-bid falls back to the user's preferred days.
+    if (!jobsColNames.has("delivery_days")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN delivery_days INTEGER");
+    }
+    // Bid amount the relevance gate picked for this project. Nullable: same
+    // fallback semantics as delivery_days (priced off the minimum budget).
+    if (!jobsColNames.has("bid_amount")) {
+      db.exec("ALTER TABLE jobs ADD COLUMN bid_amount INTEGER");
+    }
+  }
+
+  // Backfill missing columns on automation_settings.
+  const autoCols = db
+    .prepare("PRAGMA table_info(automation_settings)")
+    .all() as Array<{ name: string }>;
+  if (autoCols.length > 0) {
+    const autoColNames = new Set(autoCols.map((c) => c.name));
+    if (!autoColNames.has("consecutive_errors")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN consecutive_errors INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("proposal_threshold")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN proposal_threshold INTEGER NOT NULL DEFAULT 70");
+    }
+    // Pre-analysis rejection toggles (all default ON, matching historical behavior).
+    for (const col of [
+      "reject_stale_jobs",
+      "cheap_screening_enabled",
+      "reject_ignored_countries",
+      "reject_not_wants",
+      "reject_missing_wants",
+      "reject_missing_skills",
+      "reject_bad_reputation",
+    ] as const) {
+      if (!autoColNames.has(col)) {
+        db.exec(`ALTER TABLE automation_settings ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1`);
+      }
+    }
+    // Auto-bid freshness gate. Independent of the pre-analysis stale check:
+    // jobs can already be stored when they age past this limit.
+    if (!autoColNames.has("skip_stale_bids")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN skip_stale_bids INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!autoColNames.has("max_bid_age_hours")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN max_bid_age_hours INTEGER NOT NULL DEFAULT 12");
+    }
+    // Delivery timeline. preferred_delivery_days defaults to 4, which is the
+    // number auto-bid hardcoded before this setting existed.
+    if (!autoColNames.has("ai_delivery_timeline")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN ai_delivery_timeline INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("preferred_delivery_days")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN preferred_delivery_days INTEGER NOT NULL DEFAULT 4");
+    }
+    if (!autoColNames.has("delivery_timeline_options")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN delivery_timeline_options TEXT");
+    }
+    if (!autoColNames.has("delivery_timeline_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN delivery_timeline_instructions TEXT");
+    }
+    // Bid amount. The toggle defaults OFF (0) so every existing install keeps
+    // pricing off the minimum budget until the user turns it on.
+    if (!autoColNames.has("ai_bid_amount")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN ai_bid_amount INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("bid_amount_fractions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_fractions TEXT");
+    }
+    if (!autoColNames.has("bid_amount_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_instructions TEXT");
+    }
+    // Bid amount markup: when AI selection is off, auto-bid prices at the
+    // project minimum plus a percentage of the project maximum.
+    if (!autoColNames.has("default_bid_markup_pct")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN default_bid_markup_pct INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!autoColNames.has("bid_amount_markup_instructions")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN bid_amount_markup_instructions TEXT");
+    }
+    // Round bid up: round the final bid amount to the nearest multiple of N dollars.
+    if (!autoColNames.has("round_bid_up_to")) {
+      db.exec("ALTER TABLE automation_settings ADD COLUMN round_bid_up_to INTEGER NOT NULL DEFAULT 0");
+    }
+  }
+
+  // Backfill freelancer_bid_id on user_bids. Nullable, so existing rows simply
+  // have no platform bid id until the user supplies one in the Update bid
+  // dialog; nothing to backfill.
+  const bidCols = db
+    .prepare("PRAGMA table_info(user_bids)")
+    .all() as Array<{ name: string }>;
+  if (bidCols.length > 0) {
+    const bidColNames = new Set(bidCols.map((c) => c.name));
+    if (!bidColNames.has("freelancer_bid_id")) {
+      db.exec("ALTER TABLE user_bids ADD COLUMN freelancer_bid_id INTEGER");
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS logs (
+      id TEXT PRIMARY KEY,
+      time TEXT NOT NULL,
+      level TEXT NOT NULL,
+      category TEXT NOT NULL,
+      message TEXT NOT NULL,
+      meta TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email);
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS backup_codes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL UNIQUE,
+      used_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_profile (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      freelancer_username TEXT,
+      name TEXT,
+      title TEXT,
+      hourly_rate TEXT,
+      about TEXT,
+      skills TEXT,
+      skill_ids TEXT,
+      preferred_project_types TEXT,
+      wants TEXT,
+      not_wants TEXT,
+      ignored_countries TEXT,
+      custom_instructions TEXT,
+      imported_from_freelancer TEXT NOT NULL DEFAULT '0',
+      user_summary TEXT,
+      relevancy_instructions TEXT,
+      portfolio_summary TEXT,
+      proposal_templates TEXT,
+      proposal_system_instructions TEXT,
+      proposal_writing_instructions TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS platform_credentials (
+      id TEXT PRIMARY KEY,
+      cipher_text TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      meta TEXT,
+      status TEXT NOT NULL DEFAULT 'untested',
+      last_tested_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      project_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      client TEXT NOT NULL,
+      client_country TEXT NOT NULL,
+      budget_label TEXT NOT NULL,
+      skills TEXT,
+      posted_label TEXT NOT NULL,
+      bid_count INTEGER NOT NULL,
+      avg_bid_label TEXT NOT NULL,
+      match_score INTEGER,
+      severity TEXT,
+      status TEXT NOT NULL,
+      analysis TEXT,
+      client_quality TEXT,
+      raw_data TEXT,
+      last_analyzed_at TEXT,
+      ignored_at TEXT,
+      rejection_reason TEXT,
+      auto_bid_failed_at TEXT,
+      auto_bid_error TEXT,
+      delivery_days INTEGER,
+      bid_amount INTEGER,
+      imported_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS jobs_project_id_unique ON jobs (project_id);
+
+    CREATE TABLE IF NOT EXISTS bids (
+      id TEXT PRIMARY KEY,
+      project_id INTEGER NOT NULL,
+      bidder_id INTEGER,
+      bidder_name TEXT,
+      amount REAL,
+      currency_code TEXT,
+      is_cheapest INTEGER NOT NULL DEFAULT 0,
+      time_submitted INTEGER,
+      description TEXT,
+      fetched_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS bids_project_bidder_unique ON bids (project_id, bidder_id);
+
+    CREATE TABLE IF NOT EXISTS proposals (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL,
+      project_id INTEGER NOT NULL,
+      job_title TEXT NOT NULL,
+      client TEXT NOT NULL,
+      bid_amount INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      content TEXT NOT NULL,
+      competitor_note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS proposals_user_job_unique ON proposals (user_id, job_id);
+
+    CREATE TABLE IF NOT EXISTS proposal_generation_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      proposal_id TEXT REFERENCES proposals (id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      error TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS proposal_generation_runs_proposal_idx
+      ON proposal_generation_runs (proposal_id, started_at);
+
+    CREATE TABLE IF NOT EXISTS proposal_generation_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES proposal_generation_runs (id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT,
+      status TEXT NOT NULL DEFAULT 'info',
+      data TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS proposal_generation_events_run_seq_unique
+      ON proposal_generation_events (run_id, seq);
+
+    CREATE TABLE IF NOT EXISTS user_bids (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      project_id INTEGER NOT NULL,
+      proposal_id TEXT REFERENCES proposals (id) ON DELETE SET NULL,
+      freelancer_bid_id INTEGER,
+      job_title TEXT NOT NULL,
+      client TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      milestone_percentage INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'submitted',
+      outcome TEXT,
+      via TEXT NOT NULL DEFAULT 'manual',
+      submitted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      scan_interval_seconds INTEGER NOT NULL DEFAULT 60,
+      auto_analyze INTEGER NOT NULL DEFAULT 0,
+      auto_match INTEGER NOT NULL DEFAULT 0,
+      auto_draft INTEGER NOT NULL DEFAULT 0,
+      autobid_enabled INTEGER NOT NULL DEFAULT 0,
+      proposal_threshold INTEGER NOT NULL DEFAULT 70,
+      min_match_score INTEGER NOT NULL DEFAULT 80,
+      min_bid INTEGER NOT NULL DEFAULT 0,
+      max_bid INTEGER NOT NULL DEFAULT 0,
+      daily_cap INTEGER NOT NULL DEFAULT 5,
+      bids_today INTEGER NOT NULL DEFAULT 0,
+      cap_date TEXT,
+      paused INTEGER NOT NULL DEFAULT 0,
+      consecutive_errors INTEGER NOT NULL DEFAULT 0,
+      reject_stale_jobs INTEGER NOT NULL DEFAULT 1,
+      skip_stale_bids INTEGER NOT NULL DEFAULT 1,
+      max_bid_age_hours INTEGER NOT NULL DEFAULT 12,
+      cheap_screening_enabled INTEGER NOT NULL DEFAULT 1,
+      reject_ignored_countries INTEGER NOT NULL DEFAULT 1,
+      reject_not_wants INTEGER NOT NULL DEFAULT 1,
+      reject_missing_wants INTEGER NOT NULL DEFAULT 1,
+      reject_missing_skills INTEGER NOT NULL DEFAULT 1,
+      reject_bad_reputation INTEGER NOT NULL DEFAULT 1,
+      ai_delivery_timeline INTEGER NOT NULL DEFAULT 0,
+      preferred_delivery_days INTEGER NOT NULL DEFAULT 4,
+      delivery_timeline_options TEXT,
+      delivery_timeline_instructions TEXT,
+      ai_bid_amount INTEGER NOT NULL DEFAULT 0,
+      bid_amount_fractions TEXT,
+      bid_amount_instructions TEXT,
+      default_bid_markup_pct INTEGER NOT NULL DEFAULT 0,
+      bid_amount_markup_instructions TEXT,
+      round_bid_up_to INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      relevance_temperature REAL NOT NULL DEFAULT 0.2,
+      relevance_max_tokens INTEGER NOT NULL DEFAULT 500,
+      relevance_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+      analysis_temperature REAL NOT NULL DEFAULT 0.2,
+      analysis_max_tokens INTEGER NOT NULL DEFAULT 1000,
+      analysis_timeout_seconds INTEGER NOT NULL DEFAULT 120,
+      proposal_temperature REAL NOT NULL DEFAULT 0.5,
+      proposal_timeout_seconds INTEGER NOT NULL DEFAULT 180,
+      proposal_correction_attempts INTEGER NOT NULL DEFAULT 1,
+      relevance_ignore_floor INTEGER NOT NULL DEFAULT 50,
+      good_score_floor INTEGER NOT NULL DEFAULT 75,
+      strong_score_floor INTEGER NOT NULL DEFAULT 90,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS discord_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      webhook_cipher_text TEXT,
+      webhook_iv TEXT,
+      webhook_auth_tag TEXT,
+      events TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      tunnel_id TEXT,
+      api_key_cipher_text TEXT,
+      api_key_iv TEXT,
+      api_key_auth_tag TEXT,
+      allow_writes INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS proposal_engine_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      engine_json TEXT NOT NULL,
+      prompts_json TEXT NOT NULL,
+      policy_json TEXT NOT NULL,
+      checks_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS proposal_playbooks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      job_type TEXT NOT NULL,
+      match_keywords TEXT NOT NULL DEFAULT '[]',
+      strategy TEXT NOT NULL,
+      opening_guidance TEXT NOT NULL DEFAULT '',
+      question_guidance TEXT NOT NULL DEFAULT '',
+      omit_guidance TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS proposal_playbooks_user_idx
+      ON proposal_playbooks (user_id, active, sort_order);
+
+    CREATE TABLE IF NOT EXISTS proposal_samples (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      job_type TEXT NOT NULL DEFAULT 'general',
+      content TEXT NOT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      outcome TEXT NOT NULL DEFAULT 'unknown',
+      rating INTEGER NOT NULL DEFAULT 3,
+      preferred INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS proposal_samples_user_idx
+      ON proposal_samples (user_id, active, job_type);
+
+    CREATE TABLE IF NOT EXISTS profile_audit_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+      rules_json TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      model TEXT,
+      run_on_save INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_audits (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      score INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      findings_json TEXT NOT NULL,
+      model TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS profile_audits_user_idx
+      ON profile_audits (user_id, created_at);
+  `);
+
+  const auditSettingsCols = db
+    .prepare("PRAGMA table_info(profile_audit_settings)")
+    .all() as Array<{ name: string }>;
+  if (!auditSettingsCols.some((column) => column.name === "run_on_save")) {
+    db.exec(
+      "ALTER TABLE profile_audit_settings ADD COLUMN run_on_save INTEGER NOT NULL DEFAULT 0"
+    );
+  }
+
+  const sampleCols = db
+    .prepare("PRAGMA table_info(proposal_samples)")
+    .all() as Array<{ name: string }>;
+  if (!sampleCols.some((column) => column.name === "preferred")) {
+    db.exec("ALTER TABLE proposal_samples ADD COLUMN preferred INTEGER NOT NULL DEFAULT 0");
+  }
+}

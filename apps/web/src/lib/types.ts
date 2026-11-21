@@ -1,0 +1,611 @@
+/**
+ * Domain types shared across the app. UI components consume only these
+ * shapes, which keeps them independent of the API response details.
+ */
+
+/** Connected services. Freelancer.com and OpenRouter ship first. */
+export type PlatformId = "freelancer" | "openrouter";
+
+export type MatchBand = "strong" | "good" | "fair";
+
+/* ---------------------------------- User --------------------------------- */
+
+export interface CurrentUser {
+  name: string;
+  email: string;
+  initials: string;
+}
+
+/* ---------------------------------- Jobs --------------------------------- */
+
+export type JobSeverity = "urgent" | "warning" | "info";
+
+export type JobStatus = "new" | "analyzed" | "ignored";
+
+export interface JobSummary {
+  id: string;
+  /** Freelancer.com project id once synced; internal id before that. */
+  projectId: number;
+  title: string;
+  client: string;
+  clientCountry: string;
+  budgetLabel: string;
+  skills: string[];
+  /** Preformatted relative time, e.g. "2h ago". */
+  postedLabel: string;
+  bidCount: number;
+  avgBidLabel: string;
+  matchScore?: number;
+  severity?: JobSeverity;
+  status: JobStatus;
+  /** Why the job was rejected/ignored, when status is "ignored". */
+  rejectionReason?: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded?: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia?: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome?: "in_review" | "won" | "lost" | null;
+}
+
+export interface JobClientInfo {
+  name: string;
+  country: string;
+  memberSinceLabel: string;
+  projectsPosted: number;
+  hireRateLabel: string;
+  /** Overall reputation score (0–1) from the owner's profile, if available. */
+  reputationScore?: number | null;
+}
+
+export interface JobAttachment {
+  name: string;
+  sizeLabel: string;
+  kind: "pdf" | "docx" | "zip" | "image" | "code";
+}
+
+/**
+ * Aggregate bid statistics for a job. Cached, never fetched on page view —
+ * the UI shows when it was last refreshed and offers a manual refresh.
+ */
+export interface BidInsights {
+  bidCount: number;
+  avgBidLabel: string;
+  highBidLabel: string;
+  lowBidLabel: string;
+  /** Preformatted age of this snapshot, e.g. "12m ago". */
+  refreshedLabel: string;
+}
+
+/** Competition snapshot from stored bid data. */
+export interface CompetitionSummary {
+  bidCount: number;
+  minBid: number | null;
+  maxBid: number | null;
+  medianBid: number | null;
+  isCheapest: boolean;
+}
+
+/** The agent's read on a job. Grounded in the profile only — no invented facts. */
+export interface JobAiSuggestion {
+  verdict: MatchBand | "poor";
+  score: number;
+  summary: string;
+  reasons: string[];
+  concerns: string[];
+  recommendedBidLabel: string;
+  /** AI summary of aggregate competitor statistics, if bid insights exist. */
+  competitorNote?: string;
+}
+
+export interface ProjectUpgrades {
+  featured: boolean;
+  urgent: boolean;
+  sealed: boolean;
+}
+
+export interface JobDetailData extends JobSummary {
+  /** Description paragraphs as provided by the client. */
+  description: string[];
+  clientInfo: JobClientInfo;
+  /** Upgrade flags surfaced by the API. */
+  upgrades?: ProjectUpgrades;
+  /** Project billing type: "fixed" | "hourly". */
+  projectType?: string | null;
+  /** Bid period in days, if the project specifies one. */
+  bidPeriod?: number | null;
+  /**
+   * Delivery time (days) the relevance gate picked for this project, when AI
+   * timeline selection was on at analysis time. Null otherwise.
+   */
+  deliveryDays?: number | null;
+  /**
+   * Bid amount (dollars) the relevance gate picked for this project, only while
+   * AI bid-amount selection is enabled. Null otherwise.
+   */
+  bidAmount?: number | null;
+  /**
+   * Suggested bid amount pre-filled on the manual bid page. When AI bid-amount
+   * selection is enabled this is the gate's pick (if it made one); otherwise it
+   * is the default-markup amount. Rounded and clamped to the user's bounds.
+   * Null when no usable suggestion exists.
+   */
+  suggestedBidAmount?: number | null;
+  attachments: JobAttachment[];
+  /** Aggregate competition data from stored bids, if fetched. */
+  competition?: CompetitionSummary | null;
+  insights: BidInsights;
+  suggestion: JobAiSuggestion;
+  /** Error from the last failed automatic bid attempt, if any. */
+  bidError?: string | null;
+  /**
+   * The user's own bid on this project, when one is on record. Prefills the
+   * Update bid dialog. Null when they have not bid through the app — the dialog
+   * still opens, and they supply Freelancer's bid id themselves.
+   */
+  myBid?: {
+    id: string;
+    freelancerBidId: number | null;
+    amount: number;
+    milestonePercentage: number;
+    description: string;
+  } | null;
+}
+
+/* -------------------------------- Matches -------------------------------- */
+
+export interface MatchItem {
+  id: string;
+  jobId: string;
+  projectId: number;
+  title: string;
+  client: string;
+  budgetLabel: string;
+  postedLabel: string;
+  /** Freelancer's Unix-seconds posting time; null when the payload omitted it. */
+  postedAt: number | null;
+  score: number;
+  band: MatchBand;
+  matchedSkills: string[];
+  missingSkills: string[];
+  concerns: string[];
+  explanation: string;
+  /** True when the last automatic bid attempt failed and won't be retried. */
+  bidFailed: boolean;
+  /** Error message from the failed automatic bid attempt, when present. */
+  bidError: string | null;
+  /** True when a bid for this project was already placed (user_bids row). */
+  bidded: boolean;
+  /** How the placed bid was made, when bidded. */
+  bidVia: "manual" | "auto" | null;
+  /** Latest outcome of the placed bid, when bidded. */
+  bidOutcome: "in_review" | "won" | "lost" | null;
+}
+
+/* ------------------------------- Proposals ------------------------------- */
+
+export type ProposalStatus =
+  | "awaiting_approval"
+  | "approved"
+  | "draft"
+  | "queued"
+  | "submitted"
+  | "viewed"
+  | "shortlisted"
+  | "declined"
+  | "won";
+
+export interface ProposalSummary {
+  id: string;
+  jobTitle: string;
+  client: string;
+  bidAmount: number;
+  status: ProposalStatus;
+  /** Preformatted relative time, e.g. "2h ago". */
+  updatedLabel: string;
+}
+
+export interface ProposalRecord extends ProposalSummary {
+  /** Current draft text shown in the editor. */
+  content: string;
+  /** AI note about bid competition, shown in the list/editor. */
+  competitorNote?: string | null;
+  createdAtLabel: string;
+}
+
+/* ---------------------------------- Bids --------------------------------- */
+
+export type BidOutcome = "in_review" | "won" | "lost";
+
+export interface BidSummary {
+  id: string;
+  jobTitle: string;
+  amount: number;
+  /** True when the amount is a monthly rate rather than a fixed price. */
+  recurring: boolean;
+  outcome: BidOutcome;
+  submittedLabel: string;
+  /** How the bid was placed. */
+  via: "manual" | "auto";
+  proposalExcerpt?: string;
+}
+
+/* ---------------------------------- Logs --------------------------------- */
+
+export type LogLevel = "debug" | "info" | "success" | "warn" | "error";
+
+export type LogCategory =
+  | "sync"
+  | "analysis"
+  | "proposal"
+  | "proposals"
+  | "ai"
+  | "bid"
+  | "auth"
+  | "system";
+
+export interface LogEntry {
+  id: string;
+  timeLabel: string;
+  level: LogLevel;
+  category: LogCategory;
+  message: string;
+}
+
+/* ------------------------------- Analytics ------------------------------- */
+
+export interface SeriesPoint {
+  label: string;
+  value: number;
+}
+
+export interface AnalyticsSnapshot {
+  kpis: KpiMetric[];
+  bidsPerWeek: SeriesPoint[];
+  outcomes: { won: number; lost: number; inReview: number };
+  proposalsByStatus: SeriesPoint[];
+}
+
+/* -------------------------------- Platforms ------------------------------ */
+
+export type ConnectionStatus = "connected" | "needs_attention" | "not_connected";
+
+/** What the credentials API returns — never plaintext values. */
+export interface CredentialSummary {
+  id: PlatformId;
+  connected: boolean;
+  status: "untested" | "ok" | "failed";
+  /** Masked preview like "frl_••••3f9a". */
+  keyPreview: string | null;
+  lastTestedAt: string | null;
+  lastTestMessage: string | null;
+  /** Legacy single model id (mirrors proposalModelId when set). */
+  modelId: string | null;
+  /** Model used for relevance screening / analysis (cheap & fast). */
+  analysisModelId: string | null;
+  /** Model used for proposal writing (strong). */
+  proposalModelId: string | null;
+  /** Model used for the in-app agent chat (must support tool calling). */
+  agentModelId: string | null;
+  /** Engine behind the relevance gate: the chat model or the Jev decision model. */
+  analysisEngine: "llm" | "jev";
+  /** Jev model id, when the relevance gate runs on Jev. */
+  jevModelId: string | null;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface CredentialTestResult {
+  ok: boolean;
+  message: string;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface AiModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  contextLabel: string;
+}
+
+export interface PlatformCredential {
+  id: PlatformId;
+  name: string;
+  description: string;
+  status: ConnectionStatus;
+  /** Masked credential preview, never the real value, e.g. "frl_••••3f9a". */
+  keyPreview?: string;
+  keyInputLabel: string;
+  lastTestedLabel?: string;
+  note?: string;
+  usage?: { label: string; used: number; limit: number };
+}
+
+export interface OpenRouterState {
+  selectedModelId: string;
+  models: AiModelOption[];
+  creditLabel: string;
+  usageThisMonthLabel: string;
+}
+
+/** Effective AI tuning plus the models/engine selected on Platforms. */
+export interface AiSettings {
+  relevanceTemperature: number;
+  relevanceMaxTokens: number;
+  relevanceTimeoutSeconds: number;
+  analysisTemperature: number;
+  analysisMaxTokens: number;
+  analysisTimeoutSeconds: number;
+  proposalTemperature: number;
+  proposalTimeoutSeconds: number;
+  proposalCorrectionAttempts: number;
+  relevanceIgnoreFloor: number;
+  goodScoreFloor: number;
+  strongScoreFloor: number;
+  analysisModelId: string;
+  proposalModelId: string;
+  agentModelId: string;
+  analysisEngine: "llm" | "jev";
+  jevModelId: string;
+  updatedAt: string | null;
+}
+
+export interface AutomationSettings {
+  /** Seconds between job scans. Minimum 30, default 60. */
+  scanIntervalSeconds: number;
+  autoAnalyze: boolean;
+  autoMatch: boolean;
+  autobidEnabled: boolean;
+  /** Minimum relevance score to auto-bid (also the auto-proposal gate). */
+  minMatchScore: number;
+  minBid: number;
+  maxBid: number;
+  dailyCap: number;
+  bidsToday: number;
+  paused: boolean;
+  /** Reject jobs posted more than 12h ago before they are even stored. */
+  rejectStaleJobs: boolean;
+  /** Skip auto-bids once a job is older than maxBidAgeHours. */
+  skipStaleBids: boolean;
+  /** Maximum project age, in hours, allowed for auto-bidding. */
+  maxBidAgeHours: number;
+  /** Master switch for the free keyword/country screen run before analysis. */
+  cheapScreeningEnabled: boolean;
+  /** Reject jobs whose client country is on the profile ignore list. */
+  rejectIgnoredCountries: boolean;
+  /** Reject jobs whose text matches a profile not-wants term. */
+  rejectNotWants: boolean;
+  /** Reject jobs that don't mention any profile wants term (when any are set). */
+  rejectMissingWants: boolean;
+  /** Reject jobs that don't mention any profile skill in their title/skills. */
+  rejectMissingSkills: boolean;
+  /** Reject brand-new, unverified clients (no deposit/upgrades) before analysis. */
+  rejectBadReputation: boolean;
+  /**
+   * Let the relevance gate pick the delivery time (days) per project during
+   * screening. Off by default: the preferred days below are used instead.
+   */
+  aiDeliveryTimeline: boolean;
+  /** Delivery time (days) used when AI selection is off. */
+  preferredDeliveryDays: number;
+  /** Days the AI may choose from when AI selection is on. */
+  deliveryTimelineOptions: number[];
+  /** Guidance the AI follows when picking a delivery time. */
+  deliveryTimelineInstructions: string;
+  /**
+   * Let the relevance gate pick the bid amount per project during screening,
+   * as a fraction of the project's maximum budget. Off by default: auto-bid
+   * prices off the minimum budget instead.
+   */
+  aiBidAmount: boolean;
+  /** Fraction strings the AI may choose from (e.g. "1/2", "1/3", "2/3", "full"). */
+  bidAmountFractions: string[];
+  /** Guidance the AI follows when picking a bid amount. */
+  bidAmountInstructions: string;
+  /** Percentage (0–100) applied to the project max as a markup on the minimum,
+   * when AI bid-amount selection is off. */
+  defaultBidMarkupPct: number;
+  /** Guidance for the default markup rule. */
+  bidAmountMarkupInstructions: string;
+  /** Round the final bid amount up to the nearest multiple of this value (0 = no rounding). */
+  roundBidUpTo: number;
+}
+
+export type AutomationRunResult = "ok" | "skipped" | "error";
+
+export interface AutomationRun {
+  id: string;
+  timeLabel: string;
+  action: string;
+  detail: string;
+  result: AutomationRunResult;
+}
+
+/* -------------------------------- Discord -------------------------------- */
+
+/** Events the worker can push to a Discord channel. */
+export type DiscordEvent =
+  | "match"
+  | "needs_review"
+  | "bid_placed"
+  | "bid_failed"
+  | "api_error";
+
+/** Discord config as returned by the API — never contains the webhook URL. */
+export interface DiscordSettings {
+  configured: boolean;
+  /** Masked webhook preview, e.g. "https••••••ook". */
+  webhookPreview: string | null;
+  events: DiscordEvent[];
+}
+
+/* ------------------------------- MCP / ChatGPT --------------------------- */
+
+export type McpTunnelState =
+  | "not_configured"
+  | "disconnected"
+  | "starting"
+  | "connected"
+  | "error";
+
+/** Secure MCP Tunnel settings as returned by the API — never the runtime key. */
+export interface McpSettings {
+  configured: boolean;
+  tunnelId: string | null;
+  /** Masked runtime key, e.g. "sk-…". */
+  apiKeyPreview: string | null;
+  allowWrites: boolean;
+  enabled: boolean;
+  updatedAt: string | null;
+}
+
+export interface McpStatus {
+  state: McpTunnelState;
+  running: boolean;
+  ready: boolean;
+  installed: boolean;
+  clientVersion: string | null;
+  healthUrl: string | null;
+  lastError: string | null;
+  startedAt: string | null;
+}
+
+export interface McpState {
+  settings: McpSettings;
+  status: McpStatus;
+}
+
+/* --------------------------------- Profile ------------------------------- */
+
+export interface UserProfile {
+  name: string;
+  email: string;
+  freelancerUsername?: string;
+  title: string;
+  hourlyRateLabel: string;
+  about: string;
+  skills: string[];
+  /** Numeric Freelancer.com skill IDs paired 1:1 with skills. */
+  skillIds?: number[];
+  preferredProjectTypes: string[];
+  wants: string[];
+  notWants: string[];
+  /** Country names/codes whose jobs are excluded before any analysis. */
+  ignoredCountries: string[];
+  customInstructions: string;
+  importedFromFreelancer: boolean;
+  userSummary?: string;
+  /** Free-text guidance for the relevance model, e.g. "no web3 projects". */
+  relevancyInstructions?: string;
+  /** Markdown summary of portfolio projects, used during proposal generation. */
+  portfolioSummary?: string;
+  /** Markdown block holding all proposal templates, used during proposal generation. */
+  proposalTemplates?: string;
+  /** Editable system prompt for the proposal writer. */
+  proposalSystemInstructions?: string;
+  /** Editable pre-instructions placed before profile facts in the proposal prompt. */
+  proposalWritingInstructions?: string;
+}
+
+/* -------------------------------- Dashboard ------------------------------ */
+
+/** A job surfaced in "jobs requiring attention". */
+export interface JobAttentionItem {
+  id: string;
+  title: string;
+  client: string;
+  platform: string;
+  /** Composite match score, 0–100. */
+  matchScore: number;
+  budgetLabel: string;
+  /** Why this job is flagged, e.g. "Closes in 5 hours". */
+  reason: string;
+  severity: "urgent" | "warning" | "info";
+}
+
+export type ActivityKind =
+  | "bid_won"
+  | "bid_submitted"
+  | "strong_match"
+  | "proposal_shortlisted"
+  | "sync_completed"
+  | "automation_paused";
+
+export interface ActivityEvent {
+  id: string;
+  kind: ActivityKind;
+  message: string;
+  /** Preformatted relative time, e.g. "12 min ago". */
+  timeLabel: string;
+}
+
+/** Signed change versus a named comparison period. */
+export interface KpiDelta {
+  /** Preformatted signed value, e.g. "+9". */
+  value: string;
+  direction: "up" | "down";
+  /** Whether the movement is good for the business — "down" can be positive. */
+  tone: "positive" | "negative" | "neutral";
+  comparison: string;
+}
+
+export interface KpiMetric {
+  id: string;
+  label: string;
+  /** Preformatted value, e.g. "47" or "$4.2K". */
+  value: string;
+  /** Optional supporting context under the label. */
+  context?: string;
+  delta?: KpiDelta;
+}
+
+export interface MatchQualityBand {
+  band: MatchBand;
+  label: string;
+  /** Score range the band covers, e.g. "90–100". */
+  rangeLabel: string;
+  count: number;
+}
+
+export interface MatchQualitySnapshot {
+  windowLabel: string;
+  averageScore: number;
+  jobsAnalyzed: number;
+  strongMatches: number;
+  bands: MatchQualityBand[];
+}
+
+export interface BidAmountSettingsSummary {
+  aiBidAmount: boolean;
+  bidAmountFractions: string[];
+  defaultBidMarkupPct: number;
+  minBid: number;
+  maxBid: number;
+  bidAmountInstructions: string;
+  bidAmountMarkupInstructions: string;
+  roundBidUpTo: number;
+}
+
+export interface DashboardSnapshot {
+  kpis: KpiMetric[];
+  matchQuality: MatchQualitySnapshot;
+  jobsRequiringAttention: JobAttentionItem[];
+  recentProposals: ProposalSummary[];
+  recentBids: BidSummary[];
+  bidWinRate: { rate: number; windowLabel: string; submitted: number };
+  platforms: PlatformConnection[];
+  activity: ActivityEvent[];
+  bidAmount: BidAmountSettingsSummary | null;
+}
+
+/** Lightweight per-platform line used on the dashboard status card. */
+export interface PlatformConnection {
+  id: PlatformId | "discord";
+  name: string;
+  username?: string;
+  status: ConnectionStatus;
+  /** Preformatted, e.g. "12 min ago". Present when connected. */
+  lastSyncLabel?: string;
+  newJobsToday?: number;
+  /** Call to action shown for unconnected platforms. */
+  note?: string;
+}
